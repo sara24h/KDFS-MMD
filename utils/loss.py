@@ -2,15 +2,39 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class MMDLoss(nn.Module):
+    def __init__(self, kernel_type='rbf', sigma=1.0):
+        super(MMDLoss, self).__init__()
+        self.kernel_type = kernel_type
+        self.sigma = sigma
 
-class KDLoss(nn.Module):
-    def __init__(self):
-        super(KDLoss, self).__init__()
-        self.bce_loss = nn.BCEWithLogitsLoss()
+    def gaussian_kernel(self, x, y):
+        x_size = x.size(0)
+        y_size = y.size(0)
+        dim = x.size(1)
+        
+        x = x.unsqueeze(1)  # (x_size, 1, dim)
+        y = y.unsqueeze(0)  # (1, y_size, dim)
+        
+        tiled_x = x.expand(x_size, y_size, dim)
+        tiled_y = y.expand(x_size, y_size, dim)
+        
+        kernel_input = (tiled_x - tiled_y).pow(2).mean(2) / float(dim)
+        return torch.exp(-kernel_input / self.sigma)
 
     def forward(self, logits_t, logits_s):
-     
-        return self.bce_loss(logits_s, torch.sigmoid(logits_t))  
+        logits_t = logits_t.squeeze(-1) if logits_t.dim() > 1 else logits_t
+        logits_s = logits_s.squeeze(-1) if logits_s.dim() > 1 else logits_s
+        
+        logits_t = logits_t.view(-1, 1)
+        logits_s = logits_s.view(-1, 1)
+
+        xx = self.gaussian_kernel(logits_t, logits_t)
+        yy = self.gaussian_kernel(logits_s, logits_s)
+        xy = self.gaussian_kernel(logits_t, logits_s)
+
+        mmd = xx.mean() + yy.mean() - 2 * xy.mean()
+        return mmd
 
 
 class RCLoss(nn.Module):
@@ -29,42 +53,8 @@ class MaskLoss(nn.Module):
     def __init__(self):
         super(MaskLoss, self).__init__()
 
-    def pearson_correlation(self, filters, mask):
-       
-        mask = mask.squeeze(-1).squeeze(-1).squeeze(-1) 
-        active_indices = torch.where(mask > 0)[0]  
-        if len(active_indices) == 0:  
-            return torch.zeros(filters.size(0), filters.size(0), device=filters.device)
-        
-        active_filters = filters[active_indices]  
-        flattened_filters = active_filters.view(active_filters.size(0), -1)  
-        
-    
-        correlation_matrix = torch.corrcoef(flattened_filters)
-     
-        if correlation_matrix.dim() == 0:
-            correlation_matrix = correlation_matrix.view(1, 1)
-        
-       
-        full_correlation = torch.zeros(filters.size(0), filters.size(0), device=filters.device)
-        full_correlation[active_indices[:, None], active_indices] = correlation_matrix
-        return full_correlation
-
-    def forward(self, weights, mask):
-     
-        correlation_matrix = self.pearson_correlation(weights, mask)  
-        
-        
-        mask = mask.squeeze(-1).squeeze(-1).squeeze(-1)  
-        mask_matrix = mask.unsqueeze(1) * mask.unsqueeze(0)  
-        
-       
-        masked_correlation = correlation_matrix * mask_matrix
-        
-       
-        frobenius_norm = torch.norm(masked_correlation, p='fro')
-        
-        return frobenius_norm
+    def forward(self, Flops, Flops_baseline, compress_rate):
+        return torch.pow(Flops / Flops_baseline - compress_rate, 2)
 
 
 class CrossEntropyLabelSmooth(nn.Module):
