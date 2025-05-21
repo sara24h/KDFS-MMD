@@ -331,6 +331,12 @@ def parse_args():
         default=32,
         help="Batch size for test",
     )
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=5.0,
+        help="Maximum gradient norm for gradient clipping",
+    )
 
     return parser.parse_args()
 
@@ -388,6 +394,7 @@ def main():
     print(f"Dataset mode: {args.dataset_mode}")
     print(f"Device: {args.device}")
     print(f"Architecture: {args.arch}")
+    print(f"Max gradient norm: {args.max_grad_norm}")  # Added for debugging
 
     if args.dali:
         print("Warning: DALI is not implemented in this version. Ignoring --dali flag.")
