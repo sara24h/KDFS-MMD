@@ -38,6 +38,7 @@ master_port=${MASTER_PORT:-6681}
 num_epochs=${NUM_EPOCHS:-6}
 resume=${RESUME:-}
 finetune_student_ckpt_path=${FINETUNE_STUDENT_CKPT_PATH:-}
+max_grad_norm=${MAX_GRAD_NORM:-5.0}  # Added default value for gradient clipping
 
 # Environment variables for CUDA and memory management
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -107,6 +108,7 @@ while [[ $# -gt 0 ]]; do
         --num_epochs) num_epochs="$2"; shift 2 ;;
         --resume) resume="$2"; shift 2 ;;
         --finetune_student_ckpt_path) finetune_student_ckpt_path="$2"; shift 2 ;;
+        --max_grad_norm) max_grad_norm="$2"; shift 2 ;;  # Added parsing for max_grad_norm
         --ddp) ddp_flag="--ddp"; shift ;;
         *) echo "Ignoring unrecognized argument: $1"; shift ;;
     esac
@@ -158,6 +160,7 @@ if [ "$PHASE" = "train" ]; then
         --coef_rcloss $coef_rcloss \
         --coef_maskloss $coef_maskloss \
         --compress_rate $compress_rate \
+        --max_grad_norm $max_grad_norm \  # Added max_grad_norm
         --dataset_mode $dataset_mode \
         --dataset_dir $dataset_dir \
         $( [ -n "$resume" ] && echo "--resume $resume" ) \
@@ -190,6 +193,7 @@ if [ "$PHASE" = "train" ]; then
         --coef_rcloss "$coef_rcloss" \
         --coef_maskloss "$coef_maskloss" \
         --compress_rate "$compress_rate" \
+        --max_grad_norm "$max_grad_norm" \  # Added max_grad_norm
         --dataset_mode "$dataset_mode" \
         --dataset_dir "$dataset_dir" \
         $( [ -n "$resume" ] && echo "--resume $resume" ) \
@@ -221,6 +225,7 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_train_batch_size $finetune_train_batch_size \
         --finetune_eval_batch_size $finetune_eval_batch_size \
         --sparsed_student_ckpt_path $result_dir/student_model/finetune_${arch}_sparse_best.pt \
+        --max_grad_norm $max_grad_norm \  # Added max_grad_norm
         --dataset_mode $dataset_mode \
         --dataset_dir $dataset_dir \
         $( [ -n "$resume" ] && echo "--resume $resume" ) \
@@ -245,6 +250,7 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_train_batch_size "$finetune_train_batch_size" \
         --finetune_eval_batch_size "$finetune_eval_batch_size" \
         --sparsed_student_ckpt_path "$result_dir/student_model/finetune_${arch}_sparse_best.pt" \
+        --max_grad_norm "$max_grad_norm" \  # Added max_grad_norm
         --dataset_mode "$dataset_mode" \
         --dataset_dir "$dataset_dir" \
         $( [ -n "$resume" ] && echo "--resume $resume" ) \
