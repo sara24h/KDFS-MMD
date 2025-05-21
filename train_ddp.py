@@ -56,7 +56,7 @@ class TrainDDP:
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
         self.resume = args.resume
-        self.max_grad_norm = getattr(args, 'max_grad_norm', 1.0)  # Added for gradient clipping
+        self.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)  # Added for gradient clipping
 
         self.start_epoch = 0
         self.best_prec1 = 0
