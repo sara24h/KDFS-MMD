@@ -2,40 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class MMDLoss(nn.Module):
-    def __init__(self, kernel_type='rbf', sigma=1.0):
-        super(MMDLoss, self).__init__()
-        self.kernel_type = kernel_type
-        self.sigma = sigma
-
-    def gaussian_kernel(self, x, y):
-        x_size = x.size(0)
-        y_size = y.size(0)
-        dim = x.size(1)
-        
-        x = x.unsqueeze(1)  # (x_size, 1, dim)
-        y = y.unsqueeze(0)  # (1, y_size, dim)
-        
-        tiled_x = x.expand(x_size, y_size, dim)
-        tiled_y = y.expand(x_size, y_size, dim)
-        
-        kernel_input = (tiled_x - tiled_y).pow(2).mean(2) / float(dim)
-        return torch.exp(-kernel_input / self.sigma)
+class KDLoss(nn.Module):
+    def __init__(self):
+        super(KDLoss, self).__init__()
+        self.bce_loss = nn.BCEWithLogitsLoss()
 
     def forward(self, logits_t, logits_s):
-        logits_t = logits_t.squeeze(-1) if logits_t.dim() > 1 else logits_t
-        logits_s = logits_s.squeeze(-1) if logits_s.dim() > 1 else logits_s
-        
-        logits_t = logits_t.view(-1, 1)
-        logits_s = logits_s.view(-1, 1)
-
-        xx = self.gaussian_kernel(logits_t, logits_t)
-        yy = self.gaussian_kernel(logits_s, logits_s)
-        xy = self.gaussian_kernel(logits_t, logits_s)
-
-        mmd = xx.mean() + yy.mean() - 2 * xy.mean()
-        return mmd
-
+        return self.bce_loss(logits_s, torch.sigmoid(logits_t)) 
 
 class RCLoss(nn.Module):
     def __init__(self):
@@ -48,14 +21,37 @@ class RCLoss(nn.Module):
     def forward(self, x, y):
         return (self.rc(x) - self.rc(y)).pow(2).mean()
 
+def compute_active_filters_mmd(filters, m, sigma=1.0):
+    active_indices = torch.where(m == 1)[0]
+    if len(active_indices) < 2:  
+        return torch.tensor(0.0, device=filters.device)
+    
+    active_filters = filters[active_indices] 
+    active_filters = active_filters.view(active_filters.size(0), -1)  
+    
+    n = active_filters.size(0)
+
+    xx = torch.matmul(active_filters, active_filters.t())
+    xy = xx 
+    x2 = torch.sum(active_filters ** 2, dim=1).view(-1, 1)
+    y2 = x2.t()
+    
+    
+    dist = x2 + y2 - 2 * xx
+    kernel = torch.exp(-dist / (2 * sigma ** 2))
+    
+   
+    mmd = kernel.mean() - 2 * torch.diagonal(kernel).mean()
+    
+    return torch.sqrt(F.relu(mmd))  
 
 class MaskLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, sigma=1.0):
         super(MaskLoss, self).__init__()
+        self.sigma = sigma
 
-    def forward(self, Flops, Flops_baseline, compress_rate):
-        return torch.pow(Flops / Flops_baseline - compress_rate, 2)
-
+    def forward(self, filters, mask):
+        return compute_active_filters_mmd(filters, mask, self.sigma)
 
 class CrossEntropyLabelSmooth(nn.Module):
     def __init__(self, num_classes, epsilon):
