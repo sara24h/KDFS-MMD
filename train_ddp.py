@@ -240,7 +240,7 @@ class TrainDDP:
 
     def define_loss(self):
         self.ori_loss = nn.BCEWithLogitsLoss().cuda()
-        self.kd_loss = loss.MMDLoss(kernel_type='rbf', sigma=1.0).cuda()
+        self.kd_loss = loss.MMDLoss(sigma=1.0).cuda()
         self.rc_loss = loss.RCLoss().cuda()
         self.mask_loss = loss.MaskLoss().cuda()
 
