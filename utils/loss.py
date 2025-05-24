@@ -31,12 +31,11 @@ class RCLoss(nn.Module):
         return (self.rc(x) - self.rc(y)).pow(2).mean()
 
 class MaskLoss(nn.Module):
-    def __init__(self, sigma=1.0):
+    def __init__(self):
         super(MaskLoss, self).__init__()
-        self.sigma = sigma
 
-    def forward(self, filters, mask):
-        return compute_active_filters_mmd(filters, mask, self.sigma)
+    def forward(self, Flops, Flops_baseline, compress_rate):
+        return torch.pow(Flops / Flops_baseline - compress_rate, 2)
 
 class CrossEntropyLabelSmooth(nn.Module):
     def __init__(self, num_classes, epsilon):
