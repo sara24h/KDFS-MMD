@@ -2,13 +2,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class KDLoss(nn.Module):
-    def __init__(self):
-        super(KDLoss, self).__init__()
-        self.bce_loss = nn.BCEWithLogitsLoss()
+class MMDLoss(nn.Module):
+    def __init__(self, sigma=0.1):
+        super(MMDLoss, self).__init__()
+        self.sigma = sigma
 
-    def forward(self, logits_t, logits_s):
-        return self.bce_loss(logits_s, torch.sigmoid(logits_t)) 
+    def forward(self, X, Y):
+        # X and Y are [batch_size,] representing softened probabilities
+        m = X.size(0)
+        XX = (X.unsqueeze(1) - X.unsqueeze(0))**2
+        YY = (Y.unsqueeze(1) - Y.unsqueeze(0))**2
+        XY = (X.unsqueeze(1) - Y.unsqueeze(0))**2
+        K_XX = torch.exp(-XX / (2 * self.sigma**2))
+        K_YY = torch.exp(-YY / (2 * self.sigma**2))
+        K_XY = torch.exp(-XY / (2 * self.sigma**2))
+        mmd = torch.mean(K_XX) + torch.mean(K_YY) - 2 * torch.mean(K_XY)
+        return mmd
 
 class RCLoss(nn.Module):
     def __init__(self):
@@ -20,30 +29,6 @@ class RCLoss(nn.Module):
 
     def forward(self, x, y):
         return (self.rc(x) - self.rc(y)).pow(2).mean()
-
-def compute_active_filters_mmd(filters, m, sigma=1.0):
-    active_indices = torch.where(m == 1)[0]
-    if len(active_indices) < 2:  
-        return torch.tensor(0.0, device=filters.device)
-    
-    active_filters = filters[active_indices] 
-    active_filters = active_filters.view(active_filters.size(0), -1)  
-    
-    n = active_filters.size(0)
-
-    xx = torch.matmul(active_filters, active_filters.t())
-    xy = xx 
-    x2 = torch.sum(active_filters ** 2, dim=1).view(-1, 1)
-    y2 = x2.t()
-    
-    
-    dist = x2 + y2 - 2 * xx
-    kernel = torch.exp(-dist / (2 * sigma ** 2))
-    
-   
-    mmd = kernel.mean() - 2 * torch.diagonal(kernel).mean()
-    
-    return torch.sqrt(F.relu(mmd))  
 
 class MaskLoss(nn.Module):
     def __init__(self, sigma=1.0):
