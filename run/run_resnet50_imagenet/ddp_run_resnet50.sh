@@ -9,19 +9,20 @@ num_workers=${NUM_WORKERS:-4}
 pin_memory=${PIN_MEMORY:-true}
 seed=${SEED:-3407}
 lr=${LR:-0.006}
-warmup_steps=${WARMUP_STEPS:-10}
+warmup_steps=${WARMUP_STEPS:-20}
 warmup_start_lr=${WARMUP_START_LR:-4e-05}
-lr_decay_T_max=${LR_DECAY_T_MAX:-250}
+lr_decay_T_max=${LR_DECAY_T_MAX:-60}
 lr_decay_eta_min=${LR_DECAY_ETA_MIN:-4e-05}
 weight_decay=${WEIGHT_DECAY:-0.0005}
-train_batch_size=${TRAIN_BATCH_SIZE:-16}
-eval_batch_size=${EVAL_BATCH_SIZE:-16}
+train_batch_size=${TRAIN_BATCH_SIZE:-64}
+eval_batch_size=${EVAL_BATCH_SIZE:-64}
+target_temperature=${TARGET_TEMPERATURE:-3}
 gumbel_start_temperature=${GUMBEL_START_TEMPERATURE:-1}
 gumbel_end_temperature=${GUMBEL_END_TEMPERATURE:-0.1}
-coef_mmdloss=${COEF_MMDLOSS:-0.5}
-coef_rcloss=${COEF_RCLOSS:-10.0}
-coef_maskloss=${COEF_MASKLOSS:-100.0}
-compress_rate=${COMPRESS_RATE:-0.68}
+coef_kdloss=${COEF_KDLOSS:-1.0}
+coef_rcloss=${COEF_RCLOSS:-1.0}
+coef_maskloss=${COEF_MASKLOSS:-1.0}
+compress_rate=${COMPRESS_RATE:-0.5}
 finetune_num_epochs=${FINETUNE_NUM_EPOCHS:-15}
 finetune_lr=${FINETUNE_LR:-4e-06}
 finetune_warmup_steps=${FINETUNE_WARMUP_STEPS:-5}
@@ -31,13 +32,13 @@ finetune_lr_decay_eta_min=${FINETUNE_LR_DECAY_ETA_MIN:-4e-08}
 finetune_weight_decay=${FINETUNE_WEIGHT_DECAY:-2e-05}
 finetune_train_batch_size=${FINETUNE_TRAIN_BATCH_SIZE:-16}
 finetune_eval_batch_size=${FINETUNE_EVAL_BATCH_SIZE:-16}
-dataset_mode=${DATASET_MODE:-140k}
-dataset_dir=${DATASET_DIR:-/kaggle/input/140k-real-and-fake-faces}
+dataset_mode=${DATASET_MODE:-rvf10k}
+dataset_dir=${DATASET_DIR:-/kaggle/input/rvf10k}
 master_port=${MASTER_PORT:-6681}
-num_epochs=${NUM_EPOCHS:-80}
+num_epochs=${NUM_EPOCHS:-10}
 resume=${RESUME:-}
 finetune_student_ckpt_path=${FINETUNE_STUDENT_CKPT_PATH:-}
-max_grad_norm=${MAX_GRAD_NORM:-0.5}
+max_grad_norm=${MAX_GRAD_NORM:-0.5}  # Set to 0.5 as per your log
 
 # Environment variables for CUDA and memory management
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -85,9 +86,10 @@ while [[ $# -gt 0 ]]; do
         --weight_decay) weight_decay="$2"; shift 2 ;;
         --train_batch_size) train_batch_size="$2"; shift 2 ;;
         --eval_batch_size) eval_batch_size="$2"; shift 2 ;;
+        --target_temperature) target_temperature="$2"; shift 2 ;;
         --gumbel_start_temperature) gumbel_start_temperature="$2"; shift 2 ;;
         --gumbel_end_temperature) gumbel_end_temperature="$2"; shift 2 ;;
-        --coef_mmdloss) coef_mmdloss="$2"; shift 2 ;;
+        --coef_kdloss) coef_kdloss="$2"; shift 2 ;;
         --coef_rcloss) coef_rcloss="$2"; shift 2 ;;
         --coef_maskloss) coef_maskloss="$2"; shift 2 ;;
         --compress_rate) compress_rate="$2"; shift 2 ;;
@@ -112,19 +114,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Update pin_memory_flag
+# Update pin_memory_flag based on parsed argument
 pin_memory_flag=""
 if [ "$pin_memory" = "true" ]; then
     pin_memory_flag="--pin_memory"
 fi
 
-# Check teacher checkpoint
+# Check if teacher checkpoint exists
 if [ ! -f "$teacher_ckpt_path" ]; then
     echo "Error: Teacher checkpoint not found at $teacher_ckpt_path"
     exit 1
 fi
 
-# Check resume checkpoint
+# Check if resume checkpoint exists (if provided)
 if [ -n "$resume" ] && [ ! -f "$resume" ]; then
     echo "Error: Resume checkpoint not found at $resume"
     exit 1
@@ -151,9 +153,10 @@ if [ "$PHASE" = "train" ]; then
         --weight_decay $weight_decay \
         --train_batch_size $train_batch_size \
         --eval_batch_size $eval_batch_size \
+        --target_temperature $target_temperature \
         --gumbel_start_temperature $gumbel_start_temperature \
         --gumbel_end_temperature $gumbel_end_temperature \
-        --coef_mmdloss $coef_mmdloss \
+        --coef_kdloss $coef_kdloss \
         --coef_rcloss $coef_rcloss \
         --coef_maskloss $coef_maskloss \
         --compress_rate $compress_rate \
@@ -180,9 +183,10 @@ if [ "$PHASE" = "train" ]; then
         --weight_decay "$weight_decay" \
         --train_batch_size "$train_batch_size" \
         --eval_batch_size "$eval_batch_size" \
+        --target_temperature "$target_temperature" \
         --gumbel_start_temperature "$gumbel_start_temperature" \
         --gumbel_end_temperature "$gumbel_end_temperature" \
-        --coef_mmdloss "$coef_mmdloss" \
+        --coef_kdloss "$coef_kdloss" \
         --coef_rcloss "$coef_rcloss" \
         --coef_maskloss "$coef_maskloss" \
         --compress_rate "$compress_rate" \
@@ -216,9 +220,6 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_weight_decay $finetune_weight_decay \
         --finetune_train_batch_size $finetune_train_batch_size \
         --finetune_eval_batch_size $finetune_eval_batch_size \
-        --coef_mmdloss $coef_mmdloss \
-        --coef_rcloss $coef_rcloss \
-        --coef_maskloss $coef_maskloss \
         --sparsed_student_ckpt_path $result_dir/student_model/finetune_${arch}_sparse_best.pt \
         --max_grad_norm $max_grad_norm \
         --dataset_mode $dataset_mode \
@@ -244,9 +245,6 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_weight_decay "$finetune_weight_decay" \
         --finetune_train_batch_size "$finetune_train_batch_size" \
         --finetune_eval_batch_size "$finetune_eval_batch_size" \
-        --coef_mmdloss "$coef_mmdloss" \
-        --coef_rcloss "$coef_rcloss" \
-        --coef_maskloss "$coef_maskloss" \
         --sparsed_student_ckpt_path "$result_dir/student_model/finetune_${arch}_sparse_best.pt" \
         --max_grad_norm "$max_grad_norm" \
         --dataset_mode "$dataset_mode" \
