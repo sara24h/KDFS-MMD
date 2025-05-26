@@ -131,13 +131,12 @@ def parse_args():
             "GoogLeNet",
             "MobileNetV2",
         ),
-        help="The architecture to prune",
+        help="The architecture to train",
     )
     parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
-        choices=("cuda", "cpu"),
         help="Device to use",
     )
     parser.add_argument(
@@ -221,7 +220,7 @@ def parse_args():
         "--target_temperature",
         type=float,
         default=3.0,
-        help="temperature of soft targets",
+        help="temperature of soft targets (unused with MMDLoss)",
     )
     parser.add_argument(
         "--gumbel_start_temperature",
@@ -236,10 +235,10 @@ def parse_args():
         help="Gumbel-softmax temperature at the end of training",
     )
     parser.add_argument(
-        "--coef_kdloss",
+        "--coef_mmdloss",
         type=float,
         default=2.0,
-        help="Coefficient of kd loss",
+        help="Coefficient of MMD loss",
     )
     parser.add_argument(
         "--coef_rcloss",
@@ -394,7 +393,7 @@ def main():
     print(f"Dataset mode: {args.dataset_mode}")
     print(f"Device: {args.device}")
     print(f"Architecture: {args.arch}")
-    print(f"Max gradient norm: {args.max_grad_norm}")  # Added for debugging
+    print(f"Max gradient norm: {args.max_grad_norm}")
 
     if args.dali:
         print("Warning: DALI is not implemented in this version. Ignoring --dali flag.")
