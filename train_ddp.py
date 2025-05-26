@@ -106,9 +106,7 @@ class TrainDDP:
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
         os.environ["PYTHONHASHSEED"] = str(self.seed)
-        if torch.cuda.is_available
-
-():
+        if torch.cuda.is_available():
             torch.cuda.manual_seed(self.seed)
             torch.cuda.manual_seed_all(self.seed)
             torch.backends.cudnn.deterministic = True
@@ -240,7 +238,7 @@ class TrainDDP:
 
     def define_loss(self):
         self.ori_loss = nn.BCEWithLogitsLoss().cuda()
-        self.mmd_loss = loss.MMDLoss(kernel_type='rbf', sigma=1.0).cuda()  # Replaced KDLoss
+        self.mmd_loss = loss.MMDLoss(kernel_type='rbf', sigma=1.0).cuda()
         self.rc_loss = loss.RCLoss().cuda()
         self.mask_loss = loss.MaskLoss().cuda()
 
@@ -345,7 +343,7 @@ class TrainDDP:
 
         if self.rank == 0:
             meter_oriloss = meter.AverageMeter("OriLoss", ":.4e")
-            meter_mmdloss = meter.AverageMeter("MMDLoss", ":.4e")  # Changed from KDLoss
+            meter_mmdloss = meter.AverageMeter("MMDLoss", ":.4e")
             meter_rcloss = meter.AverageMeter("RCLoss", ":.4e")
             meter_maskloss = meter.AverageMeter("MaskLoss", ":.6e")
             meter_loss = meter.AverageMeter("Loss", ":.4e")
@@ -358,7 +356,7 @@ class TrainDDP:
             self.student.module.ticket = False
             if self.rank == 0:
                 meter_oriloss.reset()
-                meter_mmdloss.reset()  # Changed from meter_kdloss
+                meter_mmdloss.reset()
                 meter_rcloss.reset()
                 meter_maskloss.reset()
                 meter_loss.reset()
@@ -421,7 +419,7 @@ class TrainDDP:
 
                     dist.barrier()
                     reduced_ori_loss = self.reduce_tensor(ori_loss)
-                    reduced_mmd_loss = self.reduce_tensor(mmd_loss)  # Changed from kd_loss
+                    reduced_mmd_loss = self.reduce_tensor(mmd_loss)
                     reduced_rc_loss = self.reduce_tensor(rc_loss)
                     reduced_mask_loss = self.reduce_tensor(mask_loss)
                     reduced_total_loss = self.reduce_tensor(total_loss)
