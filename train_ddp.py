@@ -55,6 +55,7 @@ class TrainDDP:
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
         self.resume = args.resume
+        self.mmd_sigma = args.mmd_sigma
 
         self.start_epoch = 0
         self.best_prec1 = 0
