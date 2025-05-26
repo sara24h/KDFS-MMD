@@ -5,28 +5,27 @@ import torch.nn.functional as F
 import torch
 import torch.nn as nn
 
+
 class MMDLoss(nn.Module):
     def __init__(self, sigma=1.0):
         super(MMDLoss, self).__init__()
-        self.sigma = sigma if isinstance(sigma, list) else [sigma]  # پشتیبانی از سیگمای تکی یا لیست
+        self.sigma = sigma if isinstance(sigma, list) else [sigma]
 
-    def forward(self, logits, targets):
-        # تبدیل logits به احتمالات با sigmoid
-        probs = torch.sigmoid(logits)
-        real = probs[targets == 1]
-        fake = probs[targets == 0]
-        
-        if len(real) == 0 or len(fake) == 0:
-            return torch.tensor(0.0, device=logits.device)
+    def gaussian_kernel(self, x, y, sigma):
+        beta = 1.0 / (2.0 * sigma ** 2)
+        x = x.view(x.size(0), -1)
+        y = y.view(y.size(0), -1)
+        dist = torch.cdist(x, y) ** 2
+        return torch.exp(-beta * dist)
 
+    def forward(self, source, target):
+     
         mmd = 0.0
         for sigma in self.sigma:
-            # محاسبه کرنل گوسی
-            real_kernel = self.gaussian_kernel(real, real, sigma)
-            fake_kernel = self.gaussian_kernel(fake, fake, sigma)
-            cross_kernel = self.gaussian_kernel(real, fake, sigma)
-            mmd += torch.mean(real_kernel) + torch.mean(fake_kernel) - 2 * torch.mean(cross_kernel)
-        
+            source_kernel = self.gaussian_kernel(source, source, sigma)
+            target_kernel = self.gaussian_kernel(target, target, sigma)
+            cross_kernel = self.gaussian_kernel(source, target, sigma)
+            mmd += torch.mean(source_kernel) + torch.mean(target_kernel) - 2 * torch.mean(cross_kernel)
         return mmd / len(self.sigma)
 
     def gaussian_kernel(self, x, y, sigma):
