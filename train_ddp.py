@@ -423,9 +423,8 @@ class TrainDDP:
                         # Apply MMD only to the last feature layer
                         mmd_loss = self.mmd_loss(feature_list_student[-1], feature_list_teacher[-1])
 
-                        rc_loss = torch.tensor(0, device=images.device)
-                        for i in range(len(feature_list_student)):
-                            rc_loss += self.rc_loss(feature_list_student[i], feature_list_teacher[i])
+                        # Apply RC loss only to the last feature layer
+                        rc_loss = self.rc_loss(feature_list_student[-1].float(), feature_list_teacher[-1].float())
 
                         Flops_baseline = Flops_baselines[self.arch][self.args.dataset_type]
                         Flops = self.student.module.get_flops()
@@ -436,7 +435,7 @@ class TrainDDP:
                         total_loss = (
                             ori_loss
                             + self.coef_mmdloss * mmd_loss
-                            + self.coef_rcloss * rc_loss / len(feature_list_student)
+                            + self.coef_rcloss * rc_loss
                             + self.coef_maskloss * mask_loss
                         )
 
@@ -461,9 +460,7 @@ class TrainDDP:
                         n = images.size(0)
                         meter_oriloss.update(reduced_ori_loss.item(), n)
                         meter_mmdloss.update(self.coef_mmdloss * reduced_mmd_loss.item(), n)
-                        meter_rcloss.update(
-                            self.coef_rcloss * reduced_rc_loss.item() / len(feature_list_student), n
-                        )
+                        meter_rcloss.update(self.coef_rcloss * reduced_rc_loss.item(), n)
                         meter_maskloss.update(self.coef_maskloss * reduced_mask_loss.item(), n)
                         meter_loss.update(reduced_total_loss.item(), n)
                         meter_top1.update(reduced_prec1.item(), n)
@@ -589,7 +586,7 @@ class TrainDDP:
                     self.save_student_ckpt(False, epoch)
 
                 self.logger.info(
-                    " => Best top1 accuracy on validation before finetune : " + str(self.best_prec1)
+                    " => Best top1 accuracy on validation before training : " + str(self.best_prec1)
                 )
 
         if self.rank == 0:
