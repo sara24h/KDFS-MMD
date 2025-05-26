@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import torch
+import torch.nn as nn
+
 class MMDLoss(nn.Module):
     def __init__(self, sigma=1.0):
         super(MMDLoss, self).__init__()
@@ -29,6 +32,12 @@ class MMDLoss(nn.Module):
                 kernel[i:i_end, j:j_end] = torch.exp(-kernel_input / (2.0 * self.sigma ** 2))
         
         return kernel
+
+    def forward(self, x, y):
+        xx = self.gaussian_kernel(x, x)
+        yy = self.gaussian_kernel(y, y)
+        xy = self.gaussian_kernel(x, y)
+        return torch.mean(xx + yy - 2 * xy)
 
 class RCLoss(nn.Module):
     def __init__(self):
