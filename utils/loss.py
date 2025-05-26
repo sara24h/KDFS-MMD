@@ -11,8 +11,16 @@ class MMDLoss(nn.Module):
         beta = 1.0 / (2.0 * sigma ** 2)
         x = x.view(x.size(0), -1)
         y = y.view(y.size(0), -1)
-        dist = torch.cdist(x, y) ** 2
-        return torch.exp(-beta * dist)
+ 
+        batch_size = 16
+        kernel = torch.zeros(x.size(0), y.size(0), device=x.device)
+        for i in range(0, x.size(0), batch_size):
+            x_batch = x[i:i+batch_size]
+            for j in range(0, y.size(0), batch_size):
+                y_batch = y[j:j+batch_size]
+                dist = torch.cdist(x_batch, y_batch) ** 2
+                kernel[i:i+batch_size, j:j+batch_size] = torch.exp(-beta * dist)
+        return kernel
 
     def forward(self, source, target):
         mmd = 0.0
