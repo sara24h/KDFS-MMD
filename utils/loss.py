@@ -2,42 +2,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 class MMDLoss(nn.Module):
-    def __init__(self, sigma=1.0):
+    def __init__(self, sigma=0.1):
         super(MMDLoss, self).__init__()
         self.sigma = sigma
 
-    def gaussian_kernel(self, x, y, chunk_size=8):
-        x = x.to(dtype=torch.float32).view(x.size(0), -1)
-        y = y.to(dtype=torch.float32).view(x.size(0), -1)
-        batch_size, dim = x.size()
-        kernel = torch.zeros(batch_size, batch_size, device=x.device, dtype=torch.float32)
-        for i in range(0, batch_size, chunk_size):
-            i_end = min(i + chunk_size, batch_size)
-            for j in range(0, batch_size, chunk_size):
-                j_end = min(j + chunk_size, batch_size)
-                x_chunk = x[i:i_end].unsqueeze(1)
-                y_chunk = y[j:j_end].unsqueeze(0)
-                diff = x_chunk - y_chunk
-                kernel_input = diff.pow(2).sum(2) / float(dim)
-                kernel[i:i_end, j:j_end] = torch.exp(-kernel_input / (2.0 * self.sigma ** 2))
-        return kernel
-
-    def forward(self, x, y):
-        print(f"MMDLoss input x shape: {x.shape}, dtype: {x.dtype}")
-        print(f"MMDLoss input y shape: {y.shape}, dtype: {y.dtype}")
-        x = x.to(dtype=torch.float32)
-        y = y.to(dtype=torch.float32)
-        print(f"MMDLoss after conversion x dtype: {x.dtype}")
-        print(f"MMDLoss after conversion y dtype: {y.dtype}")
-        xx = self.gaussian_kernel(x, x)
-        yy = self.gaussian_kernel(y, y)
-        xy = self.gaussian_kernel(x, y)
-        return torch.mean(xx + yy - 2 * xy)
+    def forward(self, X, Y):
+        # X and Y are [batch_size,] representing softened probabilities
+        m = X.size(0)
+        XX = (X.unsqueeze(1) - X.unsqueeze(0))**2
+        YY = (Y.unsqueeze(1) - Y.unsqueeze(0))**2
+        XY = (X.unsqueeze(1) - Y.unsqueeze(0))**2
+        K_XX = torch.exp(-XX / (2 * self.sigma**2))
+        K_YY = torch.exp(-YY / (2 * self.sigma**2))
+        K_XY = torch.exp(-XY / (2 * self.sigma**2))
+        mmd = torch.mean(K_XX) + torch.mean(K_YY) - 2 * torch.mean(K_XY)
+        return mmd
 
 class RCLoss(nn.Module):
     def __init__(self):
@@ -50,14 +30,12 @@ class RCLoss(nn.Module):
     def forward(self, x, y):
         return (self.rc(x) - self.rc(y)).pow(2).mean()
 
-
 class MaskLoss(nn.Module):
     def __init__(self):
         super(MaskLoss, self).__init__()
 
     def forward(self, Flops, Flops_baseline, compress_rate):
         return torch.pow(Flops / Flops_baseline - compress_rate, 2)
-
 
 class CrossEntropyLabelSmooth(nn.Module):
     def __init__(self, num_classes, epsilon):
