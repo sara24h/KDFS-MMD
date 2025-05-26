@@ -50,6 +50,7 @@ class SoftMaskedConv2d(nn.Module):
             x, weight=masked_weight, bias=self.bias, stride=self.stride, padding=self.padding
         )
         self.feature_map_h, self.feature_map_w = out.shape[2], out.shape[3]
+        print(f"SoftMaskedConv2d output shape: {out.shape}, dtype: {out.dtype}")
         return out
 
     def update_gumbel_temperature(self, temperature):
@@ -100,10 +101,10 @@ class MaskedNet(nn.Module):
         image_sizes = {
             "hardfakevsrealfaces": 300,
             "rvf10k": 256,
-            "140k": 256  # اضافه کردن اندازه تصویر برای دیتاست 140k
+            "140k": 256
         }
         dataset_type = getattr(self, "dataset_type", "hardfakevsrealfaces")
-        input_size = image_sizes.get(dataset_type, 256)  # مقدار پیش‌فرض 256 در صورت عدم وجود
+        input_size = image_sizes.get(dataset_type, 256)
         
         conv1_h = (input_size - 7 + 2 * 3) // 2 + 1
         maxpool_h = (conv1_h - 3 + 2 * 1) // 2 + 1
@@ -237,7 +238,7 @@ class ResNet_sparse(MaskedNet):
         self,
         block,
         num_blocks,
-        num_classes=1,  # تغییر به 1 برای خروجی باینری
+        num_classes=1,
         gumbel_start_temperature=2.0,
         gumbel_end_temperature=0.5,
         num_epochs=200,
@@ -289,19 +290,27 @@ class ResNet_sparse(MaskedNet):
 
         for block in self.layer1:
             out = block(out, self.ticket)
-        feature_list.append(self.feat1(out))
+        feature = self.feat1(out)
+        print(f"Feature 1 shape: {feature.shape}, dtype: {feature.dtype}")
+        feature_list.append(feature)
 
         for block in self.layer2:
             out = block(out, self.ticket)
-        feature_list.append(self.feat2(out))
+        feature = self.feat2(out)
+        print(f"Feature 2 shape: {feature.shape}, dtype: {feature.dtype}")
+        feature_list.append(feature)
 
         for block in self.layer3:
             out = block(out, self.ticket)
-        feature_list.append(self.feat3(out))
+        feature = self.feat3(out)
+        print(f"Feature 3 shape: {feature.shape}, dtype: {feature.dtype}")
+        feature_list.append(feature)
 
         for block in self.layer4:
             out = block(out, self.ticket)
-        feature_list.append(self.feat4(out))
+        feature = self.feat4(out)
+        print(f"Feature 4 shape: {feature.shape}, dtype: {feature.dtype}")
+        feature_list.append(feature)
 
         out = self.avgpool(out)
         out = out.view(out.size(0), -1)
@@ -314,7 +323,7 @@ def ResNet_50_sparse_hardfakevsreal(
     return ResNet_sparse(
         block=Bottleneck_sparse,
         num_blocks=[3, 4, 6, 3],
-        num_classes=1,  # تغییر به 1 برای خروجی باینری
+        num_classes=1,
         gumbel_start_temperature=gumbel_start_temperature,
         gumbel_end_temperature=gumbel_end_temperature,
         num_epochs=num_epochs,
@@ -327,7 +336,7 @@ def ResNet_50_sparse_rvf10k(
     return ResNet_sparse(
         block=Bottleneck_sparse,
         num_blocks=[3, 4, 6, 3],
-        num_classes=1,  # تغییر به 1 برای خروجی باینری
+        num_classes=1,
         gumbel_start_temperature=gumbel_start_temperature,
         gumbel_end_temperature=gumbel_end_temperature,
         num_epochs=num_epochs,
@@ -340,7 +349,7 @@ def ResNet_50_sparse_140k(
     return ResNet_sparse(
         block=Bottleneck_sparse,
         num_blocks=[3, 4, 6, 3],
-        num_classes=1,  # تغییر به 1 برای خروجی باینری
+        num_classes=1,
         gumbel_start_temperature=gumbel_start_temperature,
         gumbel_end_temperature=gumbel_end_temperature,
         num_epochs=num_epochs,
