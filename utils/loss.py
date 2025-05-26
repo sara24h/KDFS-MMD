@@ -12,34 +12,24 @@ class MMDLoss(nn.Module):
         self.sigma = sigma
 
     def gaussian_kernel(self, x, y, chunk_size=8):
-        """
-        Compute Gaussian kernel in chunks to reduce memory usage.
-        x, y: Tensors of shape [batch_size, ...] (any number of dimensions)
-        Returns: Kernel matrix of shape [batch_size, batch_size]
-        """
-        x = x.to(dtype=torch.float32).view(x.size(0), -1)  # تبدیل به float32 و صاف کردن
-        y = y.to(dtype=torch.float32).view(y.size(0), -1)  # تبدیل به float32 و صاف کردن
-        
+        x = x.to(dtype=torch.float32).view(x.size(0), -1)
+        y = y.to(dtype=torch.float32).view(y.size(0), -1)
         batch_size, dim = x.size()
         kernel = torch.zeros(batch_size, batch_size, device=x.device, dtype=torch.float32)
-
         for i in range(0, batch_size, chunk_size):
             i_end = min(i + chunk_size, batch_size)
             for j in range(0, batch_size, chunk_size):
                 j_end = min(j + chunk_size, batch_size)
-                
-                x_chunk = x[i:i_end].unsqueeze(1)  # [chunk_size, 1, dim]
-                y_chunk = y[j:j_end].unsqueeze(0)  # [1, chunk_size, dim]
-                
-                diff = x_chunk - y_chunk  # [chunk_size_i, chunk_size_j, dim]
+                x_chunk = x[i:i_end].unsqueeze(1)
+                y_chunk = y[j:j_end].unsqueeze(0)
+                diff = x_chunk - y_chunk
                 kernel_input = diff.pow(2).sum(2) / float(dim)
                 kernel[i:i_end, j:j_end] = torch.exp(-kernel_input / (2.0 * self.sigma ** 2))
-        
         return kernel
 
     def forward(self, x, y):
-        x = x.to(dtype=torch.float32)  # اطمینان از نوع float32
-        y = y.to(dtype=torch.float32)  # اطمینان از نوع float32
+        x = x.to(dtype=torch.float32)
+        y = y.to(dtype=torch.float32)
         xx = self.gaussian_kernel(x, x)
         yy = self.gaussian_kernel(y, y)
         xy = self.gaussian_kernel(x, y)
