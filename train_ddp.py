@@ -391,7 +391,7 @@ class TrainDDP:
                         teacher_probs = torch.sigmoid(logits_teacher / self.target_temperature)
                         
                         ori_loss = self.ori_loss(logits_student, targets)
-                        mmd_loss = self.kd_loss(logits_teacher/target_temperature, logits_student/target_temperature)
+                        mmd_loss = self.kd_loss(logits_teacher, logits_student)
 
                         rc_loss = torch.tensor(0, device=images.device)
                         for i in range(len(feature_list_student)):
