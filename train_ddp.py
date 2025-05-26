@@ -49,7 +49,7 @@ class TrainDDP:
         self.eval_batch_size = args.eval_batch_size
         self.gumbel_start_temperature = args.gumbel_start_temperature
         self.gumbel_end_temperature = args.gumbel_end_temperature
-        self.coef_mmdloss = args.coef_mmdloss  # Changed from coef_kdloss
+        self.coef_mmdloss = args.coef_mmdloss
         self.coef_rcloss = args.coef_rcloss
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
@@ -546,7 +546,7 @@ class TrainDDP:
 
                 self.logger.info(
                     "[Val model Flops] Epoch {0} : ".format(epoch)
-                    + str(Flops.item() / (10**6))
+                    + str(Flops.item / (10**6))
                     + "M"
                 )
 
