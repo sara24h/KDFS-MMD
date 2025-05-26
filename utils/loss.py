@@ -2,9 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import torch
-import torch.nn as nn
-
 class MMDLoss(nn.Module):
     def __init__(self, sigma=1.0):
         super(MMDLoss, self).__init__()
@@ -16,12 +13,11 @@ class MMDLoss(nn.Module):
         x, y: Tensors of shape [batch_size, ...] (any number of dimensions)
         Returns: Kernel matrix of shape [batch_size, batch_size]
         """
-        # صاف کردن تنسورها به شکل [batch_size, dim]
         x = x.view(x.size(0), -1)  # تبدیل به [batch_size, dim]
         y = y.view(y.size(0), -1)  # تبدیل به [batch_size, dim]
         
         batch_size, dim = x.size()
-        kernel = torch.zeros(batch_size, batch_size, device=x.device)
+        kernel = torch.zeros(batch_size, batch_size, device=x.device, dtype=torch.float32)
 
         for i in range(0, batch_size, chunk_size):
             i_end = min(i + chunk_size, batch_size)
