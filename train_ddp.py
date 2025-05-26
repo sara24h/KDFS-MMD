@@ -10,7 +10,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from torch.cuda.amp import autocast, GradScaler
+from torch.cuda.amp import GradScaler
+from torch.amp import autocast
 from data.dataset import Dataset_selector
 from model.student.ResNet_sparse import ResNet_50_sparse_hardfakevsreal, ResNet_50_sparse_rvf10k
 from utils import utils, loss, meter, scheduler
@@ -56,6 +57,7 @@ class TrainDDP:
         self.compress_rate = args.compress_rate
         self.resume = args.resume
         self.mmd_sigma = args.mmd_sigma
+        self.max_grad_norm = args.max_grad_norm
 
         self.start_epoch = 0
         self.best_prec1 = 0
@@ -338,7 +340,7 @@ class TrainDDP:
 
         torch.cuda.empty_cache()
         self.teacher.eval()
-        scaler = GradScaler()
+        scaler = torch.amp.GradScaler('cuda')
 
         if self.resume:
             self.resume_student_ckpt()
@@ -388,7 +390,7 @@ class TrainDDP:
                     images = images.cuda()
                     targets = targets.cuda().float()
 
-                    with autocast():
+                    with torch.amp.autocast('cuda'):
                         logits_student, feature_list_student = self.student(images)
                         logits_student = logits_student.squeeze(1)
                         with torch.no_grad():
@@ -396,22 +398,21 @@ class TrainDDP:
                             logits_teacher = logits_teacher.squeeze(1)
 
                         ori_loss = self.ori_loss(logits_student, targets)
-                        mmd_loss = torch.tensor(0, device=images.device)
+                        mmd_loss = torch.tensor(0.0, device=images.device, dtype=torch.float32)
                         for i in range(len(feature_list_student)):
-                            mmd_loss = self.mmd_loss(feature_list_student[-1], feature_list_teacher[-1])
+                            layer_mmd = self.mmd_loss(feature_list_student[i], feature_list_teacher[i])
+                            if self.rank == 0:
+                                print(f"MMD Loss for layer {i}: {layer_mmd.item()}")
+                            mmd_loss += layer_mmd
                         mmd_loss = mmd_loss / len(feature_list_student)
 
-                        rc_loss = torch.tensor(0, device=images.device)
+                        rc_loss = torch.tensor(0.0, device=images.device, dtype=torch.float32)
                         for i in range(len(feature_list_student)):
-                            rc_loss = rc_loss + self.rc_loss(
-                                feature_list_student[i], feature_list_teacher[i]
-                            )
+                            rc_loss += self.rc_loss(feature_list_student[i], feature_list_teacher[i])
 
                         Flops_baseline = Flops_baselines[self.arch][self.args.dataset_type]
                         Flops = self.student.module.get_flops()
-                        mask_loss = self.mask_loss(
-                            Flops, Flops_baseline * (10**6), self.compress_rate
-                        )
+                        mask_loss = self.mask_loss(Flops, Flops_baseline * (10**6), self.compress_rate)
 
                         total_loss = (
                             ori_loss
@@ -421,6 +422,7 @@ class TrainDDP:
                         )
 
                     scaler.scale(total_loss).backward()
+                    torch.nn.utils.clip_grad_norm_(self.student.parameters(), self.max_grad_norm)
                     scaler.step(self.optim_weight)
                     scaler.step(self.optim_mask)
                     scaler.update()
@@ -528,25 +530,21 @@ class TrainDDP:
                             logits_teacher, feature_list_teacher = self.teacher(images)
                             logits_teacher = logits_teacher.squeeze(1)
 
-
                             ori_loss = self.ori_loss(logits_student, targets)
-                            mmd_loss = torch.tensor(0, device=images.device)
-                            
+                            mmd_loss = torch.tensor(0.0, device=images.device, dtype=torch.float32)
                             for i in range(len(feature_list_student)):
-                                mmd_loss = self.mmd_loss(feature_list_student[-1], feature_list_teacher[-1])  
+                                layer_mmd = self.mmd_loss(feature_list_student[i], feature_list_teacher[i])
+                                print(f"Val MMD Loss for layer {i}: {layer_mmd.item()}")
+                                mmd_loss += layer_mmd
                             mmd_loss = mmd_loss / len(feature_list_student)
 
-                        
-                            rc_loss = torch.tensor(0, device=images.device)
+                            rc_loss = torch.tensor(0.0, device=images.device, dtype=torch.float32)
                             for i in range(len(feature_list_student)):
-                                rc_loss = rc_loss + self.rc_loss(
-                                    feature_list_student[i], feature_list_teacher[i]
-                                )
+                                rc_loss += self.rc_loss(feature_list_student[i], feature_list_teacher[i])
+
                             Flops_baseline = Flops_baselines[self.arch][self.args.dataset_type]
                             Flops = self.student.module.get_flops()
-                            mask_loss = self.mask_loss(
-                                Flops, Flops_baseline * (10**6), self.compress_rate
-                            )
+                            mask_loss = self.mask_loss(Flops, Flops_baseline * (10**6), self.compress_rate)
 
                             total_loss = (
                                 ori_loss
@@ -560,7 +558,6 @@ class TrainDDP:
                             prec1 = 100. * correct / images.size(0)
                             n = images.size(0)
 
-                            # به‌روزرسانی متغیرهای میانگین
                             meter_val_oriloss.update(ori_loss.item(), n)
                             meter_val_mmdloss.update(self.coef_mmdloss * mmd_loss.item(), n)
                             meter_val_rcloss.update(
