@@ -15,7 +15,7 @@ from model.student.ResNet_sparse import ResNet_50_sparse_hardfakevsreal, ResNet_
 from model.teacher.ResNet import ResNet_50_hardfakevsreal
 from utils import utils, loss, meter, scheduler
 
-# Define MMDLoss in utils/loss.py or directly here
+# Define MMDLoss
 class MMDLoss(nn.Module):
     def __init__(self, sigma=1.0):
         super(MMDLoss, self).__init__()
@@ -46,6 +46,14 @@ class MMDLoss(nn.Module):
         mmd = k_xx.mean() + k_yy.mean() - 2 * k_xy.mean() + 1e-6  # Add small constant for stability
         return mmd
 
+Flops_baselines = {
+    "ResNet_50": {
+        "hardfakevsrealfaces": 7700.0,
+        "rvf10k": 5000.0,
+        "140k": 5390.0,
+    }
+}
+
 class TrainDDP:
     def __init__(self, args):
         self.args = args
@@ -69,7 +77,7 @@ class TrainDDP:
         self.target_temperature = args.target_temperature
         self.gumbel_start_temperature = args.gumbel_start_temperature
         self.gumbel_end_temperature = args.gumbel_end_temperature
-        self.coef_mmdloss = args.coef_kdloss  # Reuse coef_kdloss for MMD loss
+        self.coef_mmdloss = args.coef_mmdloss  # Fixed: Use coef_mmdloss instead of coef_kdloss
         self.coef_rcloss = args.coef_rcloss
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
@@ -259,7 +267,7 @@ class TrainDDP:
 
     def define_loss(self):
         self.ori_loss = nn.BCEWithLogitsLoss().cuda()
-        self.mmd_loss = MMDLoss(sigma=self.mmd_sigma).cuda()  # Use MMDLoss instead of KDLoss
+        self.mmd_loss = MMDLoss(sigma=self.mmd_sigma).cuda()
         self.rc_loss = loss.RCLoss().cuda()
         self.mask_loss = loss.MaskLoss().cuda()
 
@@ -364,7 +372,7 @@ class TrainDDP:
 
         if self.rank == 0:
             meter_oriloss = meter.AverageMeter("OriLoss", ":.4e")
-            meter_mmdloss = meter.AverageMeter("MMDLoss", ":.4e")  # Replace KDLoss with MMDLoss
+            meter_mmdloss = meter.AverageMeter("MMDLoss", ":.4e")
             meter_rcloss = meter.AverageMeter("RCLoss", ":.4e")
             meter_maskloss = meter.AverageMeter("MaskLoss", ":.6e")
             meter_loss = meter.AverageMeter("Loss", ":.4e")
