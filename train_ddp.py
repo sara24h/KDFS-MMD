@@ -16,7 +16,6 @@ from model.student.ResNet_sparse import ResNet_50_sparse_hardfakevsreal, ResNet_
 from utils import utils, loss, meter, scheduler
 from thop import profile
 from model.teacher.ResNet import ResNet_50_hardfakevsreal
-from torch import amp
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
@@ -56,7 +55,6 @@ class TrainDDP:
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
         self.resume = args.resume
-        self.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)
 
         self.start_epoch = 0
         self.best_prec1 = 0
@@ -211,8 +209,9 @@ class TrainDDP:
                     images = images.cuda()
                     targets = targets.cuda().float()
                     logits, _ = self.teacher(images)
+                    logits = logits.squeeze(1)
                     preds = (torch.sigmoid(logits) > 0.5).float()
-                    correct += (preds == targets.unsqueeze(1)).sum().item()
+                    correct += (preds == targets).sum().item()
                     total += images.size(0)
                     break
                 accuracy = 100. * correct / total
@@ -240,7 +239,7 @@ class TrainDDP:
 
     def define_loss(self):
         self.ori_loss = nn.BCEWithLogitsLoss().cuda()
-        self.kd_loss = loss.MMDLoss(sigma=1.0).cuda()
+        self.kd_loss = loss.KDLoss().cuda()
         self.rc_loss = loss.RCLoss().cuda()
         self.mask_loss = loss.MaskLoss().cuda()
 
@@ -338,23 +337,19 @@ class TrainDDP:
 
         torch.cuda.empty_cache()
         self.teacher.eval()
-        scaler = torch.amp.GradScaler('cuda')
+        scaler = GradScaler()
 
         if self.resume:
             self.resume_student_ckpt()
 
         if self.rank == 0:
             meter_oriloss = meter.AverageMeter("OriLoss", ":.4e")
-            meter_mmdloss = meter.AverageMeter("MMDLoss", ":.4e")
+            meter_kdloss = meter.AverageMeter("KDLoss", ":.4e")
             meter_rcloss = meter.AverageMeter("RCLoss", ":.4e")
             meter_maskloss = meter.AverageMeter("MaskLoss", ":.6e")
             meter_loss = meter.AverageMeter("Loss", ":.4e")
             meter_top1 = meter.AverageMeter("Acc@1", ":6.2f")
-            meter_val_loss = meter.AverageMeter("ValLoss", ":.4e")
-            meter_val_oriloss = meter.AverageMeter("ValOriLoss", ":.4e")
-            meter_val_mmdloss = meter.AverageMeter("ValMMDLoss", ":.4e")
-            meter_val_rcloss = meter.AverageMeter("ValRCLoss", ":.4e")
-            meter_val_maskloss = meter.AverageMeter("ValMaskLoss", ":.6e")
+            meter_val_loss = meter.AverageMeter("ValLoss", ":.4e")  # Added validation loss meter
 
         for epoch in range(self.start_epoch + 1, self.num_epochs + 1):
             self.train_loader.sampler.set_epoch(epoch)
@@ -362,7 +357,7 @@ class TrainDDP:
             self.student.module.ticket = False
             if self.rank == 0:
                 meter_oriloss.reset()
-                meter_mmdloss.reset()
+                meter_kdloss.reset()
                 meter_rcloss.reset()
                 meter_maskloss.reset()
                 meter_loss.reset()
@@ -383,15 +378,19 @@ class TrainDDP:
                     images = images.cuda()
                     targets = targets.cuda().float()
 
-                    with torch.amp.autocast('cuda'):
+                    with autocast():
                         logits_student, feature_list_student = self.student(images)
-                        logits_student = logits_student.squeeze(1)/ self.target_temperature
+                        logits_student = logits_student.squeeze(1)
                         with torch.no_grad():
                             logits_teacher, feature_list_teacher = self.teacher(images)
-                            logits_teacher = logits_teacher.squeeze(1)/ self.target_temperature
+                            logits_teacher = logits_teacher.squeeze(1)
 
                         ori_loss = self.ori_loss(logits_student, targets)
-                        mmd_loss = self.kd_loss(logits_teacher, logits_student)
+                        kd_loss = (self.target_temperature**2) * self.kd_loss(
+                            logits_teacher,
+                            logits_student,
+                            self.target_temperature
+                        )
 
                         rc_loss = torch.tensor(0, device=images.device)
                         for i in range(len(feature_list_student)):
@@ -407,17 +406,12 @@ class TrainDDP:
 
                         total_loss = (
                             ori_loss
-                            + self.coef_kdloss * mmd_loss
+                            + self.coef_kdloss * kd_loss
                             + self.coef_rcloss * rc_loss / len(feature_list_student)
                             + self.coef_maskloss * mask_loss
                         )
 
                     scaler.scale(total_loss).backward()
-                    scaler.unscale_(self.optim_weight)
-                    scaler.unscale_(self.optim_mask)
-                    torch.nn.utils.clip_grad_norm_(
-                        list(self.student.module.parameters()), max_norm=self.max_grad_norm
-                    )
                     scaler.step(self.optim_weight)
                     scaler.step(self.optim_mask)
                     scaler.update()
@@ -428,7 +422,7 @@ class TrainDDP:
 
                     dist.barrier()
                     reduced_ori_loss = self.reduce_tensor(ori_loss)
-                    reduced_mmd_loss = self.reduce_tensor(mmd_loss)
+                    reduced_kd_loss = self.reduce_tensor(kd_loss)
                     reduced_rc_loss = self.reduce_tensor(rc_loss)
                     reduced_mask_loss = self.reduce_tensor(mask_loss)
                     reduced_total_loss = self.reduce_tensor(total_loss)
@@ -437,7 +431,7 @@ class TrainDDP:
                     if self.rank == 0:
                         n = images.size(0)
                         meter_oriloss.update(reduced_ori_loss.item(), n)
-                        meter_mmdloss.update(self.coef_kdloss * reduced_mmd_loss.item(), n)
+                        meter_kdloss.update(self.coef_kdloss * reduced_kd_loss.item(), n)
                         meter_rcloss.update(
                             self.coef_rcloss * reduced_rc_loss.item() / len(feature_list_student), n
                         )
@@ -459,7 +453,7 @@ class TrainDDP:
             if self.rank == 0:
                 Flops = self.student.module.get_flops()
                 self.writer.add_scalar("train/loss/ori_loss", meter_oriloss.avg, global_step=epoch)
-                self.writer.add_scalar("train/loss/mmd_loss", meter_mmdloss.avg, global_step=epoch)
+                self.writer.add_scalar("train/loss/kd_loss", meter_kdloss.avg, global_step=epoch)
                 self.writer.add_scalar("train/loss/rc_loss", meter_rcloss.avg, global_step=epoch)
                 self.writer.add_scalar("train/loss/mask_loss", meter_maskloss.avg, global_step=epoch)
                 self.writer.add_scalar("train/loss/total_loss", meter_loss.avg, global_step=epoch)
@@ -474,7 +468,7 @@ class TrainDDP:
                     "Gumbel_temperature {gumbel_temperature:.2f} "
                     "LR {lr:.6f} "
                     "OriLoss {ori_loss:.4f} "
-                    "MMDLoss {mmd_loss:.4f} "
+                    "KDLoss {kd_loss:.4f} "
                     "RCLoss {rc_loss:.4f} "
                     "MaskLoss {mask_loss:.6f} "
                     "TotalLoss {total_loss:.4f} "
@@ -483,7 +477,7 @@ class TrainDDP:
                         gumbel_temperature=self.student.module.gumbel_temperature,
                         lr=lr,
                         ori_loss=meter_oriloss.avg,
-                        mmd_loss=meter_mmdloss.avg,
+                        kd_loss=meter_kdloss.avg,
                         rc_loss=meter_rcloss.avg,
                         mask_loss=meter_maskloss.avg,
                         total_loss=meter_loss.avg,
@@ -507,67 +501,24 @@ class TrainDDP:
                 self.student.eval()
                 self.student.module.ticket = True
                 meter_top1.reset()
-                meter_val_loss.reset()
-                meter_val_oriloss.reset()
-                meter_val_mmdloss.reset()
-                meter_val_rcloss.reset()
-                meter_val_maskloss.reset()
-
+                meter_val_loss.reset()  # Reset validation loss meter
                 with torch.no_grad():
                     with tqdm(total=len(self.val_loader), ncols=100) as _tqdm:
                         _tqdm.set_description("Validation epoch: {}/{}".format(epoch, self.num_epochs))
                         for images, targets in self.val_loader:
                             images = images.cuda()
                             targets = targets.cuda().float()
+                            logits_student, _ = self.student(images)
+                            logits_student = logits_student.squeeze(1)
 
-                            # Compute student and teacher outputs
-                            logits_student, feature_list_student = self.student(images)
-                            logits_student = logits_student.squeeze(1) / self.target_temperature
-                            logits_teacher, feature_list_teacher = self.teacher(images)
-                            logits_teacher = logits_teacher.squeeze(1) / self.target_temperature
+                            # Compute validation loss
+                            val_loss = self.ori_loss(logits_student, targets)
+                            meter_val_loss.update(val_loss.item(), images.size(0))
 
-                            self.logger.info(f"Validation logits mean: {logits_student.mean().item():.4f}, std: {logits_student.std().item():.4f}")
-                            preds = torch.sigmoid(logits_student)
-                            self.logger.info(f"Validation predictions mean: {preds.mean().item():.4f}, std: {preds.std().item():.4f}")
-                            
-                            # Compute all losses
-                            ori_loss = self.ori_loss(logits_student, targets)
-                            mmd_loss = self.kd_loss(logits_teacher, logits_student)
-
-                            rc_loss = torch.tensor(0, device=images.device)
-                            for i in range(len(feature_list_student)):
-                                rc_loss = rc_loss + self.rc_loss(
-                                    feature_list_student[i], feature_list_teacher[i]
-                                )
-
-                            Flops_baseline = Flops_baselines[self.arch][self.args.dataset_type]
-                            Flops = self.student.module.get_flops()
-                            mask_loss = self.mask_loss(
-                                Flops, Flops_baseline * (10**6), self.compress_rate
-                            )
-
-                            # Combine losses
-                            total_val_loss = (
-                                ori_loss
-                                + self.coef_kdloss * mmd_loss
-                                + self.coef_rcloss * rc_loss / len(feature_list_student)
-                                + self.coef_maskloss * mask_loss
-                            )
-
-                            # Update meters
-                            n = images.size(0)
-                            meter_val_oriloss.update(ori_loss.item(), n)
-                            meter_val_mmdloss.update(self.coef_kdloss * mmd_loss.item(), n)
-                            meter_val_rcloss.update(
-                                self.coef_rcloss * rc_loss.item() / len(feature_list_student), n
-                            )
-                            meter_val_maskloss.update(self.coef_maskloss * mask_loss.item(), n)
-                            meter_val_loss.update(total_val_loss.item(), n)
-
-                            # Compute accuracy
                             preds = (torch.sigmoid(logits_student) > 0.5).float()
                             correct = (preds == targets).sum().item()
                             prec1 = 100. * correct / images.size(0)
+                            n = images.size(0)
                             meter_top1.update(prec1, n)
 
                             _tqdm.set_postfix(
@@ -577,32 +528,18 @@ class TrainDDP:
                             _tqdm.update(1)
                             time.sleep(0.01)
 
-                # Log validation metrics
                 Flops = self.student.module.get_flops()
                 self.writer.add_scalar("val/acc/top1", meter_top1.avg, global_step=epoch)
-                self.writer.add_scalar("val/loss/ori_loss", meter_val_oriloss.avg, global_step=epoch)
-                self.writer.add_scalar("val/loss/mmd_loss", meter_val_mmdloss.avg, global_step=epoch)
-                self.writer.add_scalar("val/loss/rc_loss", meter_val_rcloss.avg, global_step=epoch)
-                self.writer.add_scalar("val/loss/mask_loss", meter_val_maskloss.avg, global_step=epoch)
-                self.writer.add_scalar("val/loss/total_loss", meter_val_loss.avg, global_step=epoch)
+                self.writer.add_scalar("val/loss/ori_loss", meter_val_loss.avg, global_step=epoch)  # Log validation loss
                 self.writer.add_scalar("val/Flops", Flops, global_step=epoch)
 
                 self.logger.info(
                     "[Val] "
                     "Epoch {0} : "
-                    "Val_Acc {val_acc:.2f}, "
-                    "Val_OriLoss {ori_loss:.4f}, "
-                    "Val_MMDLoss {mmd_loss:.4f}, "
-                    "Val_RCLoss {rc_loss:.4f}, "
-                    "Val_MaskLoss {mask_loss:.6f}, "
-                    "Val_TotalLoss {total_loss:.4f}".format(
+                    "Val_Acc {val_acc:.2f}, Val_Loss {val_loss:.4f}".format(
                         epoch,
                         val_acc=meter_top1.avg,
-                        ori_loss=meter_val_oriloss.avg,
-                        mmd_loss=meter_val_mmdloss.avg,
-                        rc_loss=meter_val_rcloss.avg,
-                        mask_loss=meter_val_maskloss.avg,
-                        total_loss=meter_val_loss.avg
+                        val_loss=meter_val_loss.avg
                     )
                 )
 
