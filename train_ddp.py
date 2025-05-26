@@ -336,7 +336,7 @@ class TrainDDP:
 
         torch.cuda.empty_cache()
         self.teacher.eval()
-        scaler = GradScaler()
+        scaler = torch.amp.GradScaler('cuda') 
 
         if self.resume:
             self.resume_student_ckpt()
@@ -377,7 +377,7 @@ class TrainDDP:
                     images = images.cuda()
                     targets = targets.cuda().float()
 
-                    with autocast():
+                    with torch.amp.autocast('cuda'):
                         logits_student, feature_list_student = self.student(images)
                         logits_student = logits_student.squeeze(1)
                         with torch.no_grad():
