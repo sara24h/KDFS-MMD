@@ -337,7 +337,9 @@ def parse_args():
         default=5.0,
         help="Maximum gradient norm for gradient clipping",
     )
+    parser.add_argument('--mmd-sigma', type=float, default=1.0, help='Sigma for MMD loss Gaussian kernel')
 
+    
     return parser.parse_args()
 
 def validate_args(args):
