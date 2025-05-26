@@ -2,22 +2,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class MMDLoss(nn.Module):
-    def __init__(self, sigma=0.1):
-        super(MMDLoss, self).__init__()
-        self.sigma = sigma
+class KDLoss(nn.Module):
+    def __init__(self):
+        super(KDLoss, self).__init__()
 
-    def forward(self, X, Y):
-        # X and Y are [batch_size,] representing softened probabilities
-        m = X.size(0)
-        XX = (X.unsqueeze(1) - X.unsqueeze(0))**2
-        YY = (Y.unsqueeze(1) - Y.unsqueeze(0))**2
-        XY = (X.unsqueeze(1) - Y.unsqueeze(0))**2
-        K_XX = torch.exp(-XX / (2 * self.sigma**2))
-        K_YY = torch.exp(-YY / (2 * self.sigma**2))
-        K_XY = torch.exp(-XY / (2 * self.sigma**2))
-        mmd = torch.mean(K_XX) + torch.mean(K_YY) - 2 * torch.mean(K_XY)
-        return mmd
+    def forward(self, logits_teacher, logits_student, temperature):
+
+        kd_loss = F.binary_cross_entropy_with_logits(
+            logits_student / temperature,
+            torch.sigmoid(logits_teacher / temperature), 
+            reduction='mean'
+        )
+        return kd_loss
 
 class RCLoss(nn.Module):
     def __init__(self):
