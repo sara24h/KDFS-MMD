@@ -1,56 +1,25 @@
-import torch
-import torch.nn as nn
-from torch.cuda.amp import autocast, GradScaler
-from tqdm import tqdm
+
+import json
 import os
-from torch.utils.tensorboard import SummaryWriter
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
 import random
-import numpy as np
 import time
 from datetime import datetime
-import json
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+from torch.cuda.amp import autocast, GradScaler
 from data.dataset import Dataset_selector
 from model.student.ResNet_sparse import ResNet_50_sparse_hardfakevsreal, ResNet_50_sparse_rvf10k
-from model.teacher.ResNet import ResNet_50_hardfakevsreal
 from utils import utils, loss, meter, scheduler
+from thop import profile
+from model.teacher.ResNet import ResNet_50_hardfakevsreal
+from torch import amp
 
-# Define MMDLoss
-class MMDLoss(nn.Module):
-    def __init__(self, sigma=1.0):
-        super(MMDLoss, self).__init__()
-        self.sigma = sigma  # Bandwidth for the RBF kernel
-
-    def gaussian_kernel(self, x, y):
-        x_size = x.size(0)
-        y_size = y.size(0)
-        
-        x = x.unsqueeze(1)  # Shape: (x_size, 1, ...)
-        y = y.unsqueeze(0)  # Shape: (1, y_size, ...)
-        
-        # Ensure float32 for stable computation
-        x = x.float()
-        y = y.float()
-        
-        squared_dist = torch.sum((x - y) ** 2, dim=-1)  # Sum over feature dimension
-        kernel = torch.exp(-squared_dist / (2.0 * self.sigma ** 2))
-        return kernel
-
-    def forward(self, x, y):
-        # Flatten spatial dimensions if necessary
-        if x.dim() > 2:
-            x = x.view(x.size(0), -1)
-        if y.dim() > 2:
-            y = y.view(y.size(0), -1)
-
-        k_xx = self.gaussian_kernel(x, x)
-        k_yy = self.gaussian_kernel(y, y)
-        k_xy = self.gaussian_kernel(x, y)
-
-        # Ensure float32 for mean computation
-        mmd = k_xx.mean().float() + k_yy.mean().float() - 2 * k_xy.mean().float() + 1e-6
-        return mmd
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 Flops_baselines = {
     "ResNet_50": {
@@ -83,12 +52,12 @@ class TrainDDP:
         self.target_temperature = args.target_temperature
         self.gumbel_start_temperature = args.gumbel_start_temperature
         self.gumbel_end_temperature = args.gumbel_end_temperature
-        self.coef_mmdloss = args.coef_mmdloss
+        self.coef_kdloss = args.coef_kdloss
         self.coef_rcloss = args.coef_rcloss
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
         self.resume = args.resume
-        self.mmd_sigma = getattr(args, 'mmd_sigma', 1.0)  # Default sigma if not provided
+        self.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)  # Added for gradient clipping
 
         self.start_epoch = 0
         self.best_prec1 = 0
@@ -180,7 +149,7 @@ class TrainDDP:
             rvf10k_root_dir = None
             realfake140k_train_csv = os.path.join(self.dataset_dir, 'train.csv')
             realfake140k_valid_csv = os.path.join(self.dataset_dir, 'valid.csv')
-            realfake140k_test_csv = None
+            realfake140k_test_csv = os.path.join(self.dataset_dir, 'test.csv')
             realfake140k_root_dir = self.dataset_dir
 
         if self.rank == 0:
@@ -197,7 +166,7 @@ class TrainDDP:
                 if not os.path.exists(realfake140k_valid_csv):
                     raise FileNotFoundError(f"Valid CSV file not found: {realfake140k_valid_csv}")
                 if not os.path.exists(realfake140k_test_csv):
-                    self.test_loader = None
+                    raise FileNotFoundError(f"Test CSV file not found: {realfake140k_test_csv}")
 
         dataset_instance = Dataset_selector(
             dataset_mode=self.dataset_mode,
@@ -243,9 +212,8 @@ class TrainDDP:
                     images = images.cuda()
                     targets = targets.cuda().float()
                     logits, _ = self.teacher(images)
-                    logits = logits.squeeze(1)
                     preds = (torch.sigmoid(logits) > 0.5).float()
-                    correct += (preds == targets).sum().item()
+                    correct += (preds == targets.unsqueeze(1)).sum().item()
                     total += images.size(0)
                     break
                 accuracy = 100. * correct / total
@@ -273,7 +241,7 @@ class TrainDDP:
 
     def define_loss(self):
         self.ori_loss = nn.BCEWithLogitsLoss().cuda()
-        self.mmd_loss = MMDLoss(sigma=self.mmd_sigma).cuda()
+        self.kd_loss = loss.MMDLoss(sigma=1.0).cuda()
         self.rc_loss = loss.RCLoss().cuda()
         self.mask_loss = loss.MaskLoss().cuda()
 
@@ -371,7 +339,7 @@ class TrainDDP:
 
         torch.cuda.empty_cache()
         self.teacher.eval()
-        scaler = torch.amp.GradScaler('cuda')  # Updated for PyTorch 2.0+
+        scaler = torch.amp.GradScaler('cuda')
 
         if self.resume:
             self.resume_student_ckpt()
@@ -412,7 +380,7 @@ class TrainDDP:
                     images = images.cuda()
                     targets = targets.cuda().float()
 
-                    with torch.amp.autocast('cuda'):  # Updated for PyTorch 2.0+
+                    with torch.amp.autocast('cuda'):
                         logits_student, feature_list_student = self.student(images)
                         logits_student = logits_student.squeeze(1)
                         with torch.no_grad():
@@ -420,11 +388,13 @@ class TrainDDP:
                             logits_teacher = logits_teacher.squeeze(1)
 
                         ori_loss = self.ori_loss(logits_student, targets)
-                        # Apply MMD only to the last feature layer
-                        mmd_loss = self.mmd_loss(feature_list_student[-1], feature_list_teacher[-1])
+                        mmd_loss = self.kd_loss(logits_teacher, logits_student)
 
-                        # Apply RC loss only to the last feature layer
-                        rc_loss = self.rc_loss(feature_list_student[-1].float(), feature_list_teacher[-1].float())
+                        rc_loss = torch.tensor(0, device=images.device)
+                        for i in range(len(feature_list_student)):
+                            rc_loss = rc_loss + self.rc_loss(
+                                feature_list_student[i], feature_list_teacher[i]
+                            )
 
                         Flops_baseline = Flops_baselines[self.arch][self.args.dataset_type]
                         Flops = self.student.module.get_flops()
@@ -434,12 +404,22 @@ class TrainDDP:
 
                         total_loss = (
                             ori_loss
-                            + self.coef_mmdloss * mmd_loss
-                            + self.coef_rcloss * rc_loss
+                            + self.coef_kdloss * mmd_loss
+                            + self.coef_rcloss * rc_loss / len(feature_list_student)
                             + self.coef_maskloss * mask_loss
                         )
 
+                    # Backward pass with gradient scaling
                     scaler.scale(total_loss).backward()
+
+                    # Apply gradient clipping
+                    scaler.unscale_(self.optim_weight)  # Unscale gradients before clipping
+                    scaler.unscale_(self.optim_mask)
+                    torch.nn.utils.clip_grad_norm_(
+                        list(self.student.module.parameters()), max_norm=self.max_grad_norm
+                    )
+
+                    # Step optimizers
                     scaler.step(self.optim_weight)
                     scaler.step(self.optim_mask)
                     scaler.update()
@@ -459,8 +439,10 @@ class TrainDDP:
                     if self.rank == 0:
                         n = images.size(0)
                         meter_oriloss.update(reduced_ori_loss.item(), n)
-                        meter_mmdloss.update(self.coef_mmdloss * reduced_mmd_loss.item(), n)
-                        meter_rcloss.update(self.coef_rcloss * reduced_rc_loss.item(), n)
+                        meter_mmdloss.update(self.coef_kdloss * reduced_mmd_loss.item(), n)
+                        meter_rcloss.update(
+                            self.coef_rcloss * reduced_rc_loss.item() / len(feature_list_student), n
+                        )
                         meter_maskloss.update(self.coef_maskloss * reduced_mask_loss.item(), n)
                         meter_loss.update(reduced_total_loss.item(), n)
                         meter_top1.update(reduced_prec1.item(), n)
@@ -586,7 +568,7 @@ class TrainDDP:
                     self.save_student_ckpt(False, epoch)
 
                 self.logger.info(
-                    " => Best top1 accuracy on validation before training : " + str(self.best_prec1)
+                    " => Best top1 accuracy on validation before finetune : " + str(self.best_prec1)
                 )
 
         if self.rank == 0:
