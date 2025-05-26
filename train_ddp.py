@@ -528,9 +528,15 @@ class TrainDDP:
                             logits_teacher, feature_list_teacher = self.teacher(images)
                             logits_teacher = logits_teacher.squeeze(1)
 
-                            # محاسبه تمام مؤلفه‌های خطا
+
                             ori_loss = self.ori_loss(logits_student, targets)
-                            mmd_loss = self.mmd_loss(logits_student, targets)
+                            mmd_loss = torch.tensor(0, device=images.device)
+                            
+                            for i in range(len(feature_list_student)):
+                                mmd_loss = mmd_loss + self.mmd_loss(feature_list_student[i], feature_list_teacher[i])
+                            mmd_loss = mmd_loss / len(feature_list_student)
+
+                        
                             rc_loss = torch.tensor(0, device=images.device)
                             for i in range(len(feature_list_student)):
                                 rc_loss = rc_loss + self.rc_loss(
