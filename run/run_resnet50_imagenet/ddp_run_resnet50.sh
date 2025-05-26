@@ -109,7 +109,8 @@ while [[ $# -gt 0 ]]; do
         --max_grad_norm) max_grad_norm="$2"; shift 2 ;;
         --ddp) ddp_flag="--ddp"; shift ;;
         *) echo "Ignoring unrecognized argument: $1"; shift ;;
-    done
+    esac
+done
 
 # Update pin_memory_flag
 pin_memory_flag=""
