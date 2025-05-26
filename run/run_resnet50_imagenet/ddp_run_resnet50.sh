@@ -3,7 +3,7 @@
 # Default values
 arch=${ARCH:-ResNet_50}
 result_dir=${RESULT_DIR:-/kaggle/working/results/run_resnet50_imagenet_prune1}
-teacher_ckpt_pathTEACHER_CKPT_PATH:-/kaggle/input/teacher_model_best/pytorch/default/1/teacher_model_best.pth}
+teacher_ckpt_path=${TEACHER_CKPT_PATH:-/kaggle/input/teacher_model_best/pytorch/default/1/teacher_model_best.pth}
 device=${DEVICE:-0,1}
 num_workers=${NUM_WORKERS:-4}
 pin_memory=${PIN_MEMORY:-true}
@@ -12,7 +12,7 @@ lr=${LR:-0.006}
 warmup_steps=${WARMUP_STEPS:-10}
 warmup_start_lr=${WARMUP_START_LR:-4e-05}
 lr_decay_T_max=${LR_DECAY_T_MAX:-250}
-lr_decay_end_min=${LR_DECAY_ETA_MIN:-4e-05}
+lr_decay_eta_min=${LR_DECAY_ETA_MIN:-4e-05}
 weight_decay=${WEIGHT_DECAY:-0.0005}
 train_batch_size=${TRAIN_BATCH_SIZE:-16}
 eval_batch_size=${EVAL_BATCH_SIZE:-16}
@@ -25,12 +25,12 @@ compress_rate=${COMPRESS_RATE:-0.68}
 finetune_num_epochs=${FINETUNE_NUM_EPOCHS:-15}
 finetune_lr=${FINETUNE_LR:-4e-06}
 finetune_warmup_steps=${FINETUNE_WARMUP_STEPS:-5}
-finetune_warmup_start_lr=${FINETUNE_WARMUPSTART_LR:-4e-08}
+finetune_warmup_start_lr=${FINETUNE_WARMUP_START_LR:-4e-08}
 finetune_lr_decay_T_max=${FINETUNE_LR_DECAY_T_MAX:-20}
-finetune_lr_decay_ta_min=${FINETUNE_LR_DECAY_ETA_MIN:-4e-08}
+finetune_lr_decay_eta_min=${FINETUNE_LR_DECAY_ETA_MIN:-4e-08}
 finetune_weight_decay=${FINETUNE_WEIGHT_DECAY:-2e-05}
 finetune_train_batch_size=${FINETUNE_TRAIN_BATCH_SIZE:-16}
-finetune_eval_batch_size=$2${FINETUNE_EVAL_BATCH_SIZE:-16}
+finetune_eval_batch_size=${FINETUNE_EVAL_BATCH_SIZE:-16}
 dataset_mode=${DATASET_MODE:-140k}
 dataset_dir=${DATASET_DIR:-/kaggle/input/140k-real-and-fake-faces}
 master_port=${MASTER_PORT:-6681}
