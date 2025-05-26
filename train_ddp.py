@@ -400,7 +400,7 @@ class TrainDDP:
                         ori_loss = self.ori_loss(logits_student, targets)
                         mmd_loss = torch.tensor(0.0, device=images.device, dtype=torch.float32)
                         for i in range(len(feature_list_student)):
-                            layer_mmd = self.mmd_loss(feature_list_student[i], feature_list_teacher[i])
+                            layer_mmd = self.mmd_loss(feature_list_student[-1], feature_list_teacher[-1])
                             if self.rank == 0:
                                 print(f"MMD Loss for layer {i}: {layer_mmd.item()}")
                             mmd_loss += layer_mmd
@@ -533,7 +533,7 @@ class TrainDDP:
                             ori_loss = self.ori_loss(logits_student, targets)
                             mmd_loss = torch.tensor(0.0, device=images.device, dtype=torch.float32)
                             for i in range(len(feature_list_student)):
-                                layer_mmd = self.mmd_loss(feature_list_student[i], feature_list_teacher[i])
+                                layer_mmd = self.mmd_loss(feature_list_student[-1], feature_list_teacher[-1])
                                 print(f"Val MMD Loss for layer {i}: {layer_mmd.item()}")
                                 mmd_loss += layer_mmd
                             mmd_loss = mmd_loss / len(feature_list_student)
