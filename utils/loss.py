@@ -2,22 +2,39 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class MMDLoss(nn.Module):
-    def __init__(self, sigma=1):
-        super(MMDLoss, self).__init__()
-        self.sigma = sigma
+import torch
+import torch.nn as nn
 
-    def forward(self, X, Y):
-        # X and Y are [batch_size,] representing softened probabilities
-        m = X.size(0)
-        XX = (X.unsqueeze(1) - X.unsqueeze(0))**2
-        YY = (Y.unsqueeze(1) - Y.unsqueeze(0))**2
-        XY = (X.unsqueeze(1) - Y.unsqueeze(0))**2
-        K_XX = torch.exp(-XX / (2 * self.sigma**2))
-        K_YY = torch.exp(-YY / (2 * self.sigma**2))
-        K_XY = torch.exp(-XY / (2 * self.sigma**2))
-        mmd = torch.mean(K_XX) + torch.mean(K_YY) - 2 * torch.mean(K_XY)
-        return mmd
+class MMDLoss(nn.Module):
+    def __init__(self, sigma=1.0):
+        super(MMDLoss, self).__init__()
+        self.sigma = sigma if isinstance(sigma, list) else [sigma]  # پشتیبانی از سیگمای تکی یا لیست
+
+    def forward(self, logits, targets):
+        # تبدیل logits به احتمالات با sigmoid
+        probs = torch.sigmoid(logits)
+        real = probs[targets == 1]
+        fake = probs[targets == 0]
+        
+        if len(real) == 0 or len(fake) == 0:
+            return torch.tensor(0.0, device=logits.device)
+
+        mmd = 0.0
+        for sigma in self.sigma:
+            # محاسبه کرنل گوسی
+            real_kernel = self.gaussian_kernel(real, real, sigma)
+            fake_kernel = self.gaussian_kernel(fake, fake, sigma)
+            cross_kernel = self.gaussian_kernel(real, fake, sigma)
+            mmd += torch.mean(real_kernel) + torch.mean(fake_kernel) - 2 * torch.mean(cross_kernel)
+        
+        return mmd / len(self.sigma)
+
+    def gaussian_kernel(self, x, y, sigma):
+        beta = 1.0 / (2.0 * sigma ** 2)
+        x = x.view(x.size(0), -1)
+        y = y.view(y.size(0), -1)
+        diff = x.unsqueeze(1) - y.unsqueeze(0)
+        return torch.exp(-beta * torch.sum(diff ** 2, dim=-1))
 
 class RCLoss(nn.Module):
     def __init__(self):
