@@ -1,31 +1,50 @@
-import os
-import json
-import random
-import time
-from datetime import datetime
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
-from torch import amp
+import os
+from torch.utils.tensorboard import SummaryWriter
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
+import random
+import numpy as np
+import time
+from datetime import datetime
 from data.dataset import Dataset_selector
 from model.student.ResNet_sparse import ResNet_50_sparse_hardfakevsreal, ResNet_50_sparse_rvf10k
-from utils import utils, loss, meter, scheduler
-from thop import profile
 from model.teacher.ResNet import ResNet_50_hardfakevsreal
+from utils import utils, loss, meter, scheduler
 
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+# Define MMDLoss in utils/loss.py or directly here
+class MMDLoss(nn.Module):
+    def __init__(self, sigma=1.0):
+        super(MMDLoss, self).__init__()
+        self.sigma = sigma  # Bandwidth for the RBF kernel
 
-Flops_baselines = {
-    "ResNet_50": {
-        "hardfakevsrealfaces": 7700.0,
-        "rvf10k": 5000.0,
-        "140k": 5390.0,
-    }
-}
+    def gaussian_kernel(self, x, y):
+        x_size = x.size(0)
+        y_size = y.size(0)
+        dim = x.size(1)
+        
+        x = x.unsqueeze(1)  # Shape: (x_size, 1, dim)
+        y = y.unsqueeze(0)  # Shape: (1, y_size, dim)
+        
+        squared_dist = torch.sum((x - y) ** 2, dim=2)  # Shape: (x_size, y_size)
+        kernel = torch.exp(-squared_dist / (2.0 * self.sigma ** 2))
+        return kernel
+
+    def forward(self, x, y):
+        if x.dim() > 2:
+            x = x.view(x.size(0), -1)
+        if y.dim() > 2:
+            y = y.view(y.size(0), -1)
+
+        k_xx = self.gaussian_kernel(x, x)
+        k_yy = self.gaussian_kernel(y, y)
+        k_xy = self.gaussian_kernel(x, y)
+
+        mmd = k_xx.mean() + k_yy.mean() - 2 * k_xy.mean() + 1e-6  # Add small constant for stability
+        return mmd
 
 class TrainDDP:
     def __init__(self, args):
@@ -47,13 +66,15 @@ class TrainDDP:
         self.weight_decay = args.weight_decay
         self.train_batch_size = args.train_batch_size
         self.eval_batch_size = args.eval_batch_size
+        self.target_temperature = args.target_temperature
         self.gumbel_start_temperature = args.gumbel_start_temperature
         self.gumbel_end_temperature = args.gumbel_end_temperature
-        self.coef_mmdloss = args.coef_mmdloss
+        self.coef_mmdloss = args.coef_kdloss  # Reuse coef_kdloss for MMD loss
         self.coef_rcloss = args.coef_rcloss
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
         self.resume = args.resume
+        self.mmd_sigma = getattr(args, 'mmd_sigma', 1.0)  # Default sigma if not provided
 
         self.start_epoch = 0
         self.best_prec1 = 0
@@ -238,7 +259,7 @@ class TrainDDP:
 
     def define_loss(self):
         self.ori_loss = nn.BCEWithLogitsLoss().cuda()
-        self.mmd_loss = loss.MMDLoss(sigma=1.0).cuda()
+        self.mmd_loss = MMDLoss(sigma=self.mmd_sigma).cuda()  # Use MMDLoss instead of KDLoss
         self.rc_loss = loss.RCLoss().cuda()
         self.mask_loss = loss.MaskLoss().cuda()
 
@@ -336,15 +357,14 @@ class TrainDDP:
 
         torch.cuda.empty_cache()
         self.teacher.eval()
-        scaler = torch.amp.GradScaler('cuda')
-        accum_steps = 4  # Effective batch size = 16 * 4 = 64
+        scaler = GradScaler()
 
         if self.resume:
             self.resume_student_ckpt()
 
         if self.rank == 0:
             meter_oriloss = meter.AverageMeter("OriLoss", ":.4e")
-            meter_mmdloss = meter.AverageMeter("MMDLoss", ":.4e")
+            meter_mmdloss = meter.AverageMeter("MMDLoss", ":.4e")  # Replace KDLoss with MMDLoss
             meter_rcloss = meter.AverageMeter("RCLoss", ":.4e")
             meter_maskloss = meter.AverageMeter("MaskLoss", ":.6e")
             meter_loss = meter.AverageMeter("Loss", ":.4e")
@@ -372,38 +392,27 @@ class TrainDDP:
             with tqdm(total=len(self.train_loader), ncols=100, disable=self.rank != 0) as _tqdm:
                 if self.rank == 0:
                     _tqdm.set_description("epoch: {}/{}".format(epoch, self.num_epochs))
-                for i, (images, targets) in enumerate(self.train_loader):
-                    if i % accum_steps == 0:
-                        self.optim_weight.zero_grad(set_to_none=True)
-                        self.optim_mask.zero_grad(set_to_none=True)
-
+                for images, targets in self.train_loader:
+                    self.optim_weight.zero_grad()
+                    self.optim_mask.zero_grad()
                     images = images.cuda()
                     targets = targets.cuda().float()
 
-                    with torch.amp.autocast('cuda'):
+                    with autocast():
                         logits_student, feature_list_student = self.student(images)
                         logits_student = logits_student.squeeze(1)
                         with torch.no_grad():
                             logits_teacher, feature_list_teacher = self.teacher(images)
                             logits_teacher = logits_teacher.squeeze(1)
 
-                        
-                        feature_list_student = [f.to(dtype=torch.float32) for f in feature_list_student]
-                        feature_list_teacher = [f.to(dtype=torch.float32) for f in feature_list_teacher]
-
                         ori_loss = self.ori_loss(logits_student, targets)
-                  
                         mmd_loss = torch.tensor(0, device=images.device)
-                        for j in range(len(feature_list_student)):
-                            print(f"Student feature {j} shape: {feature_list_student[j].shape}, dtype: {feature_list_student[j].dtype}")
-                            print(f"Teacher feature {j} shape: {feature_list_teacher[j].shape}, dtype: {feature_list_teacher[j].dtype}")
-                            mmd_loss += self.mmd_loss(feature_list_student[j], feature_list_teacher[j])
+                        for i in range(len(feature_list_student)):
+                            mmd_loss += self.mmd_loss(feature_list_student[i], feature_list_teacher[i])
 
                         rc_loss = torch.tensor(0, device=images.device)
-                        for j in range(len(feature_list_student)):
-                            rc_loss += self.rc_loss(
-                                feature_list_student[j], feature_list_teacher[j]
-                            )
+                        for i in range(len(feature_list_student)):
+                            rc_loss += self.rc_loss(feature_list_student[i], feature_list_teacher[i])
 
                         Flops_baseline = Flops_baselines[self.arch][self.args.dataset_type]
                         Flops = self.student.module.get_flops()
@@ -416,17 +425,12 @@ class TrainDDP:
                             + self.coef_mmdloss * mmd_loss / len(feature_list_student)
                             + self.coef_rcloss * rc_loss / len(feature_list_student)
                             + self.coef_maskloss * mask_loss
-                        ) / accum_steps
+                        )
 
                     scaler.scale(total_loss).backward()
-
-                    if (i + 1) % accum_steps == 0 or (i + 1) == len(self.train_loader):
-                        scaler.unscale_(self.optim_weight)
-                        scaler.unscale_(self.optim_mask)
-                        torch.nn.utils.clip_grad_norm_(self.student.parameters(), self.args.max_grad_norm)
-                        scaler.step(self.optim_weight)
-                        scaler.step(self.optim_mask)
-                        scaler.update()
+                    scaler.step(self.optim_weight)
+                    scaler.step(self.optim_mask)
+                    scaler.update()
 
                     preds = (torch.sigmoid(logits_student) > 0.5).float()
                     correct = (preds == targets).sum().item()
@@ -437,7 +441,7 @@ class TrainDDP:
                     reduced_mmd_loss = self.reduce_tensor(mmd_loss)
                     reduced_rc_loss = self.reduce_tensor(rc_loss)
                     reduced_mask_loss = self.reduce_tensor(mask_loss)
-                    reduced_total_loss = self.reduce_tensor(total_loss * accum_steps)
+                    reduced_total_loss = self.reduce_tensor(total_loss)
                     reduced_prec1 = self.reduce_tensor(torch.tensor(prec1).cuda())
 
                     if self.rank == 0:
