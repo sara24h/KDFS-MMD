@@ -13,7 +13,7 @@ class MMDLoss(nn.Module):
 
     def gaussian_kernel(self, x, y, chunk_size=8):
         x = x.to(dtype=torch.float32).view(x.size(0), -1)
-        y = y.to(dtype=torch.float32).view(y.size(0), -1)
+        y = y.to(dtype=torch.float32).view(x.size(0), -1)
         batch_size, dim = x.size()
         kernel = torch.zeros(batch_size, batch_size, device=x.device, dtype=torch.float32)
         for i in range(0, batch_size, chunk_size):
@@ -37,7 +37,7 @@ class MMDLoss(nn.Module):
         xx = self.gaussian_kernel(x, x)
         yy = self.gaussian_kernel(y, y)
         xy = self.gaussian_kernel(x, y)
-    return torch.mean(xx + yy - 2 * xy)
+        return torch.mean(xx + yy - 2 * xy)
 
 class RCLoss(nn.Module):
     def __init__(self):
