@@ -2,18 +2,31 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class KDLoss(nn.Module):
-    def __init__(self):
-        super(KDLoss, self).__init__()
+class MMDLoss(nn.Module):
+    def __init__(self, kernel_type='rbf', sigma=1.0):
+        super(MMDLoss, self).__init__()
+        self.kernel_type = kernel_type
+        self.sigma = sigma
 
-    def forward(self, logits_teacher, logits_student, temperature):
+    def gaussian_kernel(self, x, y):
+        x_size = x.size(0)
+        y_size = y.size(0)
+        dim = x.size(1)
+        x = x.unsqueeze(1)  # (x_size, 1, dim)
+        y = y.unsqueeze(0)  # (1, y_size, dim)
+        tiled_x = x.expand(x_size, y_size, dim)
+        tiled_y = y.expand(x_size, y_size, dim)
+        kernel_input = (tiled_x - tiled_y).pow(2).sum(2) / float(dim)
+        return torch.exp(-kernel_input / self.sigma)
 
-        kd_loss = F.binary_cross_entropy_with_logits(
-            logits_student / temperature,
-            torch.sigmoid(logits_teacher / temperature), 
-            reduction='mean'
-        )
-        return kd_loss
+    def forward(self, x, y):
+        x = x.view(x.size(0), -1)  # Flatten features
+        y = y.view(y.size(0), -1)  # Flatten features
+        xx = self.gaussian_kernel(x, x)
+        yy = self.gaussian_kernel(y, y)
+        xy = self.gaussian_kernel(x, y)
+        mmd = xx.mean() + yy.mean() - 2 * xy.mean()
+        return mmd
 
 
 class RCLoss(nn.Module):
