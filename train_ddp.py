@@ -388,9 +388,13 @@ class TrainDDP:
                             logits_teacher = logits_teacher.squeeze(1)
 
                         ori_loss = self.ori_loss(logits_student, targets)
+                  
                         mmd_loss = torch.tensor(0, device=images.device)
                         for j in range(len(feature_list_student)):
-                            mmd_loss += self.mmd_loss(feature_list_student[j], feature_list_teacher[j])
+                            print(f"Student feature {j} shape: {feature_list_student[j].shape}, dtype: {feature_list_student[j].dtype}")
+                            print(f"Teacher feature {j} shape: {feature_list_teacher[j].shape}, dtype: {feature_list_teacher[j].dtype}")
+                            mmd_loss += self.mmd_loss(feature_list_student[j].to(dtype=torch.float32),
+                                                      feature_list_teacher[j].to(dtype=torch.float32))
 
                         rc_loss = torch.tensor(0, device=images.device)
                         for j in range(len(feature_list_student)):
