@@ -56,7 +56,7 @@ class TrainDDP:
         self.coef_maskloss = args.coef_maskloss
         self.compress_rate = args.compress_rate
         self.resume = args.resume
-        self.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)  # Added for gradient clipping
+        self.max_grad_norm = getattr(args, 'max_grad_norm', 5.0)
 
         self.start_epoch = 0
         self.best_prec1 = 0
@@ -351,6 +351,10 @@ class TrainDDP:
             meter_loss = meter.AverageMeter("Loss", ":.4e")
             meter_top1 = meter.AverageMeter("Acc@1", ":6.2f")
             meter_val_loss = meter.AverageMeter("ValLoss", ":.4e")
+            meter_val_oriloss = meter.AverageMeter("ValOriLoss", ":.4e")
+            meter_val_mmdloss = meter.AverageMeter("ValMMDLoss", ":.4e")
+            meter_val_rcloss = meter.AverageMeter("ValRCLoss", ":.4e")
+            meter_val_maskloss = meter.AverageMeter("ValMaskLoss", ":.6e")
 
         for epoch in range(self.start_epoch + 1, self.num_epochs + 1):
             self.train_loader.sampler.set_epoch(epoch)
@@ -408,17 +412,12 @@ class TrainDDP:
                             + self.coef_maskloss * mask_loss
                         )
 
-                    # Backward pass with gradient scaling
                     scaler.scale(total_loss).backward()
-
-                    # Apply gradient clipping
-                    scaler.unscale_(self.optim_weight)  # Unscale gradients before clipping
+                    scaler.unscale_(self.optim_weight)
                     scaler.unscale_(self.optim_mask)
                     torch.nn.utils.clip_grad_norm_(
                         list(self.student.module.parameters()), max_norm=self.max_grad_norm
                     )
-
-                    # Step optimizers
                     scaler.step(self.optim_weight)
                     scaler.step(self.optim_mask)
                     scaler.update()
@@ -509,22 +508,62 @@ class TrainDDP:
                 self.student.module.ticket = True
                 meter_top1.reset()
                 meter_val_loss.reset()
+                meter_val_oriloss.reset()
+                meter_val_mmdloss.reset()
+                meter_val_rcloss.reset()
+                meter_val_maskloss.reset()
+
                 with torch.no_grad():
                     with tqdm(total=len(self.val_loader), ncols=100) as _tqdm:
                         _tqdm.set_description("Validation epoch: {}/{}".format(epoch, self.num_epochs))
                         for images, targets in self.val_loader:
                             images = images.cuda()
                             targets = targets.cuda().float()
-                            logits_student, _ = self.student(images)
+
+                            # Compute student and teacher outputs
+                            logits_student, feature_list_student = self.student(images)
                             logits_student = logits_student.squeeze(1)
+                            logits_teacher, feature_list_teacher = self.teacher(images)
+                            logits_teacher = logits_teacher.squeeze(1)
 
-                            val_loss = self.ori_loss(logits_student, targets)
-                            meter_val_loss.update(val_loss.item(), images.size(0))
+                            # Compute all losses
+                            ori_loss = self.ori_loss(logits_student, targets)
+                            mmd_loss = self.kd_loss(logits_teacher, logits_student)
 
+                            rc_loss = torch.tensor(0, device=images.device)
+                            for i in range(len(feature_list_student)):
+                                rc_loss = rc_loss + self.rc_loss(
+                                    feature_list_student[i], feature_list_teacher[i]
+                                )
+
+                            Flops_baseline = Flops_baselines[self.arch][self.args.dataset_type]
+                            Flops = self.student.module.get_flops()
+                            mask_loss = self.mask_loss(
+                                Flops, Flops_baseline * (10**6), self.compress_rate
+                            )
+
+                            # Combine losses
+                            total_val_loss = (
+                                ori_loss
+                                + self.coef_kdloss * mmd_loss
+                                + self.coef_rcloss * rc_loss / len(feature_list_student)
+                                + self.coef_maskloss * mask_loss
+                            )
+
+                            # Update meters
+                            n = images.size(0)
+                            meter_val_oriloss.update(ori_loss.item(), n)
+                            meter_val_mmdloss.update(self.coef_kdloss * mmd_loss.item(), n)
+                            meter_val_rcloss.update(
+                                self.coef_rcloss * rc_loss.item() / len(feature_list_student), n
+                            )
+                            meter_val_maskloss.update(self.coef_maskloss * mask_loss.item(), n)
+                            meter_val_loss.update(total_val_loss.item(), n)
+
+                            # Compute accuracy
                             preds = (torch.sigmoid(logits_student) > 0.5).float()
                             correct = (preds == targets).sum().item()
                             prec1 = 100. * correct / images.size(0)
-                            n = images.size(0)
                             meter_top1.update(prec1, n)
 
                             _tqdm.set_postfix(
@@ -534,18 +573,32 @@ class TrainDDP:
                             _tqdm.update(1)
                             time.sleep(0.01)
 
+                # Log validation metrics
                 Flops = self.student.module.get_flops()
                 self.writer.add_scalar("val/acc/top1", meter_top1.avg, global_step=epoch)
-                self.writer.add_scalar("val/loss/ori_loss", meter_val_loss.avg, global_step=epoch)
+                self.writer.add_scalar("val/loss/ori_loss", meter_val_oriloss.avg, global_step=epoch)
+                self.writer.add_scalar("val/loss/mmd_loss", meter_val_mmdloss.avg, global_step=epoch)
+                self.writer.add_scalar("val/loss/rc_loss", meter_val_rcloss.avg, global_step=epoch)
+                self.writer.add_scalar("val/loss/mask_loss", meter_val_maskloss.avg, global_step=epoch)
+                self.writer.add_scalar("val/loss/total_loss", meter_val_loss.avg, global_step=epoch)
                 self.writer.add_scalar("val/Flops", Flops, global_step=epoch)
 
                 self.logger.info(
                     "[Val] "
                     "Epoch {0} : "
-                    "Val_Acc {val_acc:.2f}, Val_Loss {val_loss:.4f}".format(
+                    "Val_Acc {val_acc:.2f}, "
+                    "Val_OriLoss {ori_loss:.4f}, "
+                    "Val_MMDLoss {mmd_loss:.4f}, "
+                    "Val_RCLoss {rc_loss:.4f}, "
+                    "Val_MaskLoss {mask_loss:.6f}, "
+                    "Val_TotalLoss {total_loss:.4f}".format(
                         epoch,
                         val_acc=meter_top1.avg,
-                        val_loss=meter_val_loss.avg
+                        ori_loss=meter_val_oriloss.avg,
+                        mmd_loss=meter_val_mmdloss.avg,
+                        rc_loss=meter_val_rcloss.avg,
+                        mask_loss=meter_val_maskloss.avg,
+                        total_loss=meter_val_loss.avg
                     )
                 )
 
