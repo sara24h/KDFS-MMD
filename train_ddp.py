@@ -386,8 +386,12 @@ class TrainDDP:
                             logits_teacher, feature_list_teacher = self.teacher(images)
                             logits_teacher = logits_teacher.squeeze(1)
 
+
+                        student_probs = torch.sigmoid(logits_student / self.target_temperature)
+                        teacher_probs = torch.sigmoid(logits_teacher / self.target_temperature)
+                        
                         ori_loss = self.ori_loss(logits_student, targets)
-                        mmd_loss = self.kd_loss(logits_teacher, logits_student)
+                        mmd_loss = self.kd_loss(logits_teacher/target_temperature, logits_student/target_temperature)
 
                         rc_loss = torch.tensor(0, device=images.device)
                         for i in range(len(feature_list_student)):
