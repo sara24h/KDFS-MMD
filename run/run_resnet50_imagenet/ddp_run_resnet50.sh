@@ -14,8 +14,8 @@ warmup_start_lr=${WARMUP_START_LR:-4e-05}
 lr_decay_T_max=${LR_DECAY_T_MAX:-250}
 lr_decay_eta_min=${LR_DECAY_ETA_MIN:-4e-05}
 weight_decay=${WEIGHT_DECAY:-0.0005}
-train_batch_size=${TRAIN_BATCH_SIZE:-64}
-eval_batch_size=${EVAL_BATCH_SIZE:-64}
+train_batch_size=${TRAIN_BATCH_SIZE:-32}  # Reduced from 64
+eval_batch_size=${EVAL_BATCH_SIZE:-32}    # Reduced from 64
 gumbel_start_temperature=${GUMBEL_START_TEMPERATURE:-1}
 gumbel_end_temperature=${GUMBEL_END_TEMPERATURE:-0.1}
 coef_mmdloss=${COEF_MMDLOSS:-0.5}
@@ -216,6 +216,9 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_weight_decay $finetune_weight_decay \
         --finetune_train_batch_size $finetune_train_batch_size \
         --finetune_eval_batch_size $finetune_eval_batch_size \
+        --coef_mmdloss $coef_mmdloss \
+        --coef_rcloss $coef_rcloss \
+        --coef_maskloss $coef_maskloss \
         --sparsed_student_ckpt_path $result_dir/student_model/finetune_${arch}_sparse_best.pt \
         --max_grad_norm $max_grad_norm \
         --dataset_mode $dataset_mode \
@@ -241,6 +244,9 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_weight_decay "$finetune_weight_decay" \
         --finetune_train_batch_size "$finetune_train_batch_size" \
         --finetune_eval_batch_size "$finetune_eval_batch_size" \
+        --coef_mmdloss "$coef_mmdloss" \
+        --coef_rcloss "$coef_rcloss" \
+        --coef_maskloss "$coef_maskloss" \
         --sparsed_student_ckpt_path "$result_dir/student_model/finetune_${arch}_sparse_best.pt" \
         --max_grad_norm "$max_grad_norm" \
         --dataset_mode "$dataset_mode" \
