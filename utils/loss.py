@@ -28,12 +28,16 @@ class MMDLoss(nn.Module):
         return kernel
 
     def forward(self, x, y):
+        print(f"MMDLoss input x shape: {x.shape}, dtype: {x.dtype}")
+        print(f"MMDLoss input y shape: {y.shape}, dtype: {y.dtype}")
         x = x.to(dtype=torch.float32)
         y = y.to(dtype=torch.float32)
+        print(f"MMDLoss after conversion x dtype: {x.dtype}")
+        print(f"MMDLoss after conversion y dtype: {y.dtype}")
         xx = self.gaussian_kernel(x, x)
         yy = self.gaussian_kernel(y, y)
         xy = self.gaussian_kernel(x, y)
-        return torch.mean(xx + yy - 2 * xy)
+    return torch.mean(xx + yy - 2 * xy)
 
 class RCLoss(nn.Module):
     def __init__(self):
