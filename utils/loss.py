@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MMDLoss(nn.Module):
-    def __init__(self, sigma=0.1):
+    def __init__(self, sigma=1):
         super(MMDLoss, self).__init__()
         self.sigma = sigma
 
