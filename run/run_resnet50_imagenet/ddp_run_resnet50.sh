@@ -14,8 +14,8 @@ warmup_start_lr=${WARMUP_START_LR:-4e-05}
 lr_decay_T_max=${LR_DECAY_T_MAX:-250}
 lr_decay_eta_min=${LR_DECAY_ETA_MIN:-4e-05}
 weight_decay=${WEIGHT_DECAY:-0.0005}
-train_batch_size=${TRAIN_BATCH_SIZE:-32}  # Reduced from 64
-eval_batch_size=${EVAL_BATCH_SIZE:-32}    # Reduced from 64
+train_batch_size=${TRAIN_BATCH_SIZE:-16}
+eval_batch_size=${EVAL_BATCH_SIZE:-16}
 gumbel_start_temperature=${GUMBEL_START_TEMPERATURE:-1}
 gumbel_end_temperature=${GUMBEL_END_TEMPERATURE:-0.1}
 coef_mmdloss=${COEF_MMDLOSS:-0.5}
@@ -109,22 +109,21 @@ while [[ $# -gt 0 ]]; do
         --max_grad_norm) max_grad_norm="$2"; shift 2 ;;
         --ddp) ddp_flag="--ddp"; shift ;;
         *) echo "Ignoring unrecognized argument: $1"; shift ;;
-    esac
-done
+    done
 
-# Update pin_memory_flag based on parsed argument
+# Update pin_memory_flag
 pin_memory_flag=""
 if [ "$pin_memory" = "true" ]; then
     pin_memory_flag="--pin_memory"
 fi
 
-# Check if teacher checkpoint exists
+# Check teacher checkpoint
 if [ ! -f "$teacher_ckpt_path" ]; then
     echo "Error: Teacher checkpoint not found at $teacher_ckpt_path"
     exit 1
 fi
 
-# Check if resume checkpoint exists (if provided)
+# Check resume checkpoint
 if [ -n "$resume" ] && [ ! -f "$resume" ]; then
     echo "Error: Resume checkpoint not found at $resume"
     exit 1
@@ -251,6 +250,6 @@ elif [ "$PHASE" = "finetune" ]; then
         --max_grad_norm "$max_grad_norm" \
         --dataset_mode "$dataset_mode" \
         --dataset_dir "$dataset_dir" \
-        $( [ -n "$resume" ] && echo "--resume $resume" ) \
-        $ddp_flag
+        "$( [ -n "$resume" ] && echo "--resume $resume" )" \
+        "$ddp_flag"
 fi
