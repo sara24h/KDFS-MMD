@@ -3,31 +3,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MMDLoss(nn.Module):
-    def __init__(self, kernel_type='rbf', sigma=1.0):
+    def __init__(self, sigma=1.0):
         super(MMDLoss, self).__init__()
-        self.kernel_type = kernel_type
         self.sigma = sigma
 
-    def gaussian_kernel(self, x, y):
-        x_size = x.size(0)
-        y_size = y.size(0)
-        dim = x.size(1)
-        x = x.unsqueeze(1)  # (x_size, 1, dim)
-        y = y.unsqueeze(0)  # (1, y_size, dim)
-        tiled_x = x.expand(x_size, y_size, dim)
-        tiled_y = y.expand(x_size, y_size, dim)
-        kernel_input = (tiled_x - tiled_y).pow(2).sum(2) / float(dim)
-        return torch.exp(-kernel_input / self.sigma)
+    def gaussian_kernel(self, x, y, chunk_size=8):
+        """
+        Compute Gaussian kernel in chunks to reduce memory usage.
+        x, y: Tensors of shape [batch_size, dim]
+        Returns: Kernel matrix of shape [batch_size, batch_size]
+        """
+        batch_size, dim = x.size()
+        kernel = torch.zeros(batch_size, batch_size, device=x.device)
 
-    def forward(self, x, y):
-        x = x.view(x.size(0), -1)  # Flatten features
-        y = y.view(y.size(0), -1)  # Flatten features
-        xx = self.gaussian_kernel(x, x)
-        yy = self.gaussian_kernel(y, y)
-        xy = self.gaussian_kernel(x, y)
-        mmd = xx.mean() + yy.mean() - 2 * xy.mean()
-        return mmd
-
+        for i in range(0, batch_size, chunk_size):
+            i_end = min(i + chunk_size, batch_size)
+            for j in range(0, batch_size, chunk_size):
+                j_end = min(j + chunk_size, batch_size)
+                
+                x_chunk = x[i:i_end].unsqueeze(1)  # [chunk_size, 1, dim]
+                y_chunk = y[j:j_end].unsqueeze(0)  # [1, chunk_size, dim]
+                
+                diff = x_chunk - y_chunk  # [chunk_size_i, chunk_size_j, dim]
+                kernel_input = diff.pow(2).sum(2) / float(dim)
+                kernel[i:i_end, j:j_end] = torch.exp(-kernel_input / (2.0 * self.sigma ** 2))
+        
+        return kernel
 
 class RCLoss(nn.Module):
     def __init__(self):
