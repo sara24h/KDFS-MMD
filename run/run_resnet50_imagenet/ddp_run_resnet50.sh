@@ -250,6 +250,6 @@ elif [ "$PHASE" = "finetune" ]; then
         --max_grad_norm "$max_grad_norm" \
         --dataset_mode "$dataset_mode" \
         --dataset_dir "$dataset_dir" \
-        "$( [ -n "$resume" ] && echo "--resume $resume" )" \
-        "$ddp_flag"
+        $( [ -n "$resume" ] && echo "--resume $resume" ) \
+        $ddp_flag
 fi
