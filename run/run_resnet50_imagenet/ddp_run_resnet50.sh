@@ -19,7 +19,7 @@ eval_batch_size=${EVAL_BATCH_SIZE:-64}
 target_temperature=${TARGET_TEMPERATURE:-3}
 gumbel_start_temperature=${GUMBEL_START_TEMPERATURE:-1}
 gumbel_end_temperature=${GUMBEL_END_TEMPERATURE:-0.1}
-coef_kdloss=${COEF_KDLOSS:-1.0}
+coef_mmdloss=${COEF_MMDLOSS:-1.0}  # تغییر از coef_kdloss به coef_mmdloss
 coef_rcloss=${COEF_RCLOSS:-1.0}
 coef_maskloss=${COEF_MASKLOSS:-1.0}
 compress_rate=${COMPRESS_RATE:-0.5}
@@ -38,7 +38,8 @@ master_port=${MASTER_PORT:-6681}
 num_epochs=${NUM_EPOCHS:-10}
 resume=${RESUME:-}
 finetune_student_ckpt_path=${FINETUNE_STUDENT_CKPT_PATH:-}
-max_grad_norm=${MAX_GRAD_NORM:-0.5}  # Set to 0.5 as per your log
+max_grad_norm=${MAX_GRAD_NORM:-0.5}
+mmd_sigma=${MMD_SIGMA:-1.0}  # اضافه کردن mmd_sigma با مقدار پیش‌فرض
 
 # Environment variables for CUDA and memory management
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -89,7 +90,7 @@ while [[ $# -gt 0 ]]; do
         --target_temperature) target_temperature="$2"; shift 2 ;;
         --gumbel_start_temperature) gumbel_start_temperature="$2"; shift 2 ;;
         --gumbel_end_temperature) gumbel_end_temperature="$2"; shift 2 ;;
-        --coef_kdloss) coef_kdloss="$2"; shift 2 ;;
+        --coef_mmdloss) coef_mmdloss="$2"; shift 2 ;;  # تغییر به coef_mmdloss
         --coef_rcloss) coef_rcloss="$2"; shift 2 ;;
         --coef_maskloss) coef_maskloss="$2"; shift 2 ;;
         --compress_rate) compress_rate="$2"; shift 2 ;;
@@ -109,6 +110,7 @@ while [[ $# -gt 0 ]]; do
         --resume) resume="$2"; shift 2 ;;
         --finetune_student_ckpt_path) finetune_student_ckpt_path="$2"; shift 2 ;;
         --max_grad_norm) max_grad_norm="$2"; shift 2 ;;
+        --mmd-sigma) mmd_sigma="$2"; shift 2 ;;  # اضافه کردن mmd_sigma
         --ddp) ddp_flag="--ddp"; shift ;;
         *) echo "Ignoring unrecognized argument: $1"; shift ;;
     esac
@@ -156,10 +158,11 @@ if [ "$PHASE" = "train" ]; then
         --target_temperature $target_temperature \
         --gumbel_start_temperature $gumbel_start_temperature \
         --gumbel_end_temperature $gumbel_end_temperature \
-        --coef_kdloss $coef_kdloss \
+        --coef_mmdloss $coef_mmdloss \
         --coef_rcloss $coef_rcloss \
         --coef_maskloss $coef_maskloss \
         --compress_rate $compress_rate \
+        --mmd-sigma $mmd_sigma \
         --max_grad_norm $max_grad_norm \
         --dataset_mode $dataset_mode \
         --dataset_dir $dataset_dir \
@@ -186,10 +189,11 @@ if [ "$PHASE" = "train" ]; then
         --target_temperature "$target_temperature" \
         --gumbel_start_temperature "$gumbel_start_temperature" \
         --gumbel_end_temperature "$gumbel_end_temperature" \
-        --coef_kdloss "$coef_kdloss" \
+        --coef_mmdloss "$coef_mmdloss" \
         --coef_rcloss "$coef_rcloss" \
         --coef_maskloss "$coef_maskloss" \
         --compress_rate "$compress_rate" \
+        --mmd-sigma "$mmd_sigma" \
         --max_grad_norm "$max_grad_norm" \
         --dataset_mode "$dataset_mode" \
         --dataset_dir "$dataset_dir" \
@@ -221,6 +225,7 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_train_batch_size $finetune_train_batch_size \
         --finetune_eval_batch_size $finetune_eval_batch_size \
         --sparsed_student_ckpt_path $result_dir/student_model/finetune_${arch}_sparse_best.pt \
+        --mmd-sigma $mmd_sigma \
         --max_grad_norm $max_grad_norm \
         --dataset_mode $dataset_mode \
         --dataset_dir $dataset_dir \
@@ -246,6 +251,7 @@ elif [ "$PHASE" = "finetune" ]; then
         --finetune_train_batch_size "$finetune_train_batch_size" \
         --finetune_eval_batch_size "$finetune_eval_batch_size" \
         --sparsed_student_ckpt_path "$result_dir/student_model/finetune_${arch}_sparse_best.pt" \
+        --mmd-sigma "$mmd_sigma" \
         --max_grad_norm "$max_grad_norm" \
         --dataset_mode "$dataset_mode" \
         --dataset_dir "$dataset_dir" \
