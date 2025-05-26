@@ -526,6 +526,10 @@ class TrainDDP:
                             logits_teacher, feature_list_teacher = self.teacher(images)
                             logits_teacher = logits_teacher.squeeze(1)
 
+                            self.logger.info(f"Validation logits mean: {logits_student.mean().item():.4f}, std: {logits_student.std().item():.4f}")
+                            preds = torch.sigmoid(logits_student)
+                            self.logger.info(f"Validation predictions mean: {preds.mean().item():.4f}, std: {preds.std().item():.4f}")
+                            
                             # Compute all losses
                             ori_loss = self.ori_loss(logits_student, targets)
                             mmd_loss = self.kd_loss(logits_teacher, logits_student)
