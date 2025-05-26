@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class MMDLoss(nn.Module):
     def __init__(self, kernel_type='rbf', sigma=1.0):
         super(MMDLoss, self).__init__()
